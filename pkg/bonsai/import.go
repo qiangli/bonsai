@@ -11,6 +11,7 @@ package bonsai
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ import (
 // ImportSummary is the JSON shape returned from ImportStream / /admin/import.
 type ImportSummary struct {
 	Format     string `json:"format"`
+	Detected   string `json:"detected,omitempty"` // populated when auto-detection picked a non-default shape
 	Nquads     uint64 `json:"nquads"`
 	Batches    uint64 `json:"batches"`
 	DurationMs int64  `json:"duration_ms"`
@@ -49,11 +51,57 @@ func ImportStream(ctx context.Context, db *DB, format string, r io.Reader, batch
 	}
 
 	var inputFormat chunker.InputFormat
+	var detected string
 	switch format {
 	case "rdf":
 		inputFormat = chunker.RdfFormat
 	case "json":
-		inputFormat = chunker.JsonFormat
+		// JSON could be Dgraph-flavored (the chunker handles it natively)
+		// or one of the popular graph-export shapes (NetworkX node-link,
+		// Cytoscape elements). Sniff the head to decide.
+		sniffed, kind, err := sniffGraphJSON(r)
+		if err != nil {
+			return nil, fmt.Errorf("ImportStream: sniff: %w", err)
+		}
+		if kind == networkxNodeLink || kind == cytoscapeElements {
+			// Parse the whole document, infer a permissive schema for
+			// the predicates we observe, apply it, then feed the
+			// generated RDF triples through the chunker. Buffering the
+			// converted RDF in memory is fine for typical graph-export
+			// JSONs (well under 100 MB); for huge inputs, convert
+			// out-of-band and use --rdfs.
+			//
+			// The converter pre-allocates a contiguous UID range via
+			// db.AssignUid so the emitted RDF references each node by
+			// explicit hex UID — necessary because blank-node aliases
+			// don't survive splitting across multiple Mutate batches.
+			alloc := func(n uint64) (uint64, error) {
+				start, _, err := db.AssignUid(ctx, n)
+				return start, err
+			}
+			conv, err := prepareGraphJSON(sniffed, kind, alloc)
+			if err != nil {
+				return nil, fmt.Errorf("ImportStream: convert %s: %w", kind, err)
+			}
+			if err := db.Alter(ctx, conv.Schema); err != nil {
+				return nil, fmt.Errorf("ImportStream: apply inferred schema: %w", err)
+			}
+			r = bytes.NewReader(conv.RDF)
+			inputFormat = chunker.RdfFormat
+			detected = kind.String()
+			// The whole document is already in memory after conversion, and
+			// per-batch overhead with @reverse-edge maintenance scales
+			// poorly past a few thousand nodes (37K nquads × 37 batches
+			// hangs >60s; same nquads in a single batch lands in ~150 ms).
+			// One big batch is the right shape for an auto-detected
+			// graph import.
+			if int64(len(conv.RDF)) > int64(batchSize) {
+				batchSize = len(conv.RDF) // chunker batches by nquad count, not bytes; this is a safe upper bound
+			}
+		} else {
+			r = sniffed
+			inputFormat = chunker.JsonFormat
+		}
 	default:
 		return nil, fmt.Errorf("ImportStream: unknown format %q (want rdf or json)", format)
 	}
@@ -117,6 +165,7 @@ func ImportStream(ctx context.Context, db *DB, format string, r io.Reader, batch
 
 	summary := &ImportSummary{
 		Format:     format,
+		Detected:   detected,
 		Nquads:     nquads.Load(),
 		Batches:    batches.Load(),
 		DurationMs: time.Since(start).Milliseconds(),

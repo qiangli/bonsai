@@ -41,3 +41,4 @@ vendor
 /dgraph2-cli
 /dgraph2-bulk
 /dgraph2-live
+/.gfy-out/

@@ -578,6 +578,55 @@ func TestFeatureExportImportRoundtrip(t *testing.T) {
 	}
 }
 
+// Auto-detect import: hand a tiny NetworkX node-link JSON to ImportStream
+// without pre-applying any schema and confirm it (a) gets recognised,
+// (b) generates a permissive schema on the fly, and (c) leaves a
+// queryable graph behind.
+func TestFeatureAutoDetectNetworkXImport(t *testing.T) {
+	db := newDB(t)
+	doc := []byte(`{
+	  "directed": true,
+	  "multigraph": false,
+	  "graph": {},
+	  "nodes": [
+	    {"id": "a", "label": "Alice", "tags": ["person", "vip"]},
+	    {"id": "b", "label": "Bob"},
+	    {"id": "c", "label": "Carol"}
+	  ],
+	  "links": [
+	    {"source": "a", "target": "b", "relation": "knows"},
+	    {"source": "a", "target": "c", "relation": "knows"},
+	    {"source": "b", "target": "c", "relation": "knows"}
+	  ]
+	}`)
+
+	summary, err := bonsai.ImportStream(context.Background(), db, "json",
+		bytes.NewReader(doc), 100)
+	if err != nil {
+		t.Fatalf("ImportStream: %v", err)
+	}
+	if summary.Detected != "networkx-node-link" {
+		t.Errorf("Detected=%q, want networkx-node-link", summary.Detected)
+	}
+	if summary.Nquads == 0 {
+		t.Errorf("zero nquads ingested: %+v", summary)
+	}
+
+	got := mustQuery(t, db, `{
+		q(func: eq(gid, "a")) {
+			gid
+			label
+			tags
+			knows { gid label }
+		}
+	}`)
+	for _, want := range []string{`"gid":"a"`, `"label":"Alice"`, `"label":"Bob"`, `"label":"Carol"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("auto-imported graph missing %s: %s", want, got)
+		}
+	}
+}
+
 // QueryAsOf reads at a past timestamp. We anchor the snapshot at the
 // first write's commit timestamp (returned by Mutate); reading there
 // should see Alice but not Bob, who is inserted afterwards.
