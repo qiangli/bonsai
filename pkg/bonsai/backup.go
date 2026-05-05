@@ -323,6 +323,7 @@ func (d *DB) RestoreFromManifest(ctx context.Context, dir string) error {
 // RestoreFromManifestWithOptions is RestoreFromManifest with knobs. The
 // most common knob is UntilTs for point-in-time recovery.
 func (d *DB) RestoreFromManifestWithOptions(ctx context.Context, dir string, opts RestoreOptions) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("RestoreFromManifest", ctx,
 		map[string]any{"dir": dir, "until_ts": opts.UntilTs}, &err)()
 	master, err := readMasterManifest(dir)

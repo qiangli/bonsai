@@ -30,5 +30,22 @@ vet:
 
 all: vet build test
 
+# smoke-as-third-party simulates an external Go program importing
+# pkg/bonsai. If this stops compiling we've broken our v1 API contract
+# (see pkg/bonsai/doc.go). Run from a clean state, expects the example
+# to print exactly the line `{"q":[{"name":"Alice"}]}`.
+.PHONY: smoke-as-third-party
+smoke-as-third-party:
+	@echo "→ third-party smoke: build + run testdata/third-party-example"
+	@go build -o /tmp/bonsai-smoke ./testdata/third-party-example
+	@got=$$(/tmp/bonsai-smoke); \
+	  want='{"q":[{"name":"Alice"}]}'; \
+	  if [ "$$got" = "$$want" ]; then \
+	    echo "  OK: $$got"; \
+	  else \
+	    echo "  FAIL: got $$got, want $$want"; exit 1; \
+	  fi
+	@rm -f /tmp/bonsai-smoke
+
 clean:
 	rm -f bonsai

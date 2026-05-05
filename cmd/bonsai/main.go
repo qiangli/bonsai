@@ -36,6 +36,7 @@ import (
 	"github.com/qiangli/bonsai/cmd/bonsai/cli"
 	"github.com/qiangli/bonsai/cmd/bonsai/live"
 	"github.com/qiangli/bonsai/cmd/bonsai/server"
+	"github.com/qiangli/bonsai/cmd/bonsai/tools"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -103,6 +104,13 @@ func main() {
 		runWithArgv("bonsai bulk", rest, bulk.Main)
 	case sub == "live":
 		runWithArgv("bonsai live", rest, live.Main)
+	case sub == "diff":
+		// `bonsai diff <a.ntx> <b.ntx>` — local-only utility, no server.
+		runWithArgv("bonsai diff", rest, tools.DiffMain)
+	case sub == "freeze":
+		// `bonsai freeze <data-dir> -o <out.bonsai>` — produce a
+		// single-file read-only artifact. Local-only.
+		runWithArgv("bonsai freeze", rest, tools.FreezeMain)
 	case cliSubs[sub]:
 		// Re-include the subcommand so cli's own dispatch sees it as
 		// flag.Args()[0].
@@ -144,9 +152,18 @@ client subcommands (operate against a running server):
   backup manifest <dir> [incremental]
                                upstream-compatible multi-file backup
   restore <src>                restore (file → stream, dir → manifest)
-  export <fmt> <dst>           export to a server-local path (rdf|json)
+  export <fmt> <dst>           export to a server-local path (rdf|json|ntx)
   import <fmt> <file>          upload <file> contents and ingest
   download <fmt> [out]         stream the export back to <out> or stdout
+
+local utilities:
+  diff <a.ntx> <b.ntx>         line-diff two NTX exports (deterministic
+                               canonical N-Quads). Exit 0 if equal, 1 if
+                               not, 2 on read error.
+  freeze <data-dir> -o <file>  compact + tarball a build-once data dir
+                               into a single .bonsai artifact. Open it
+                               read-only with bonsai server --frozen
+                               or, in Go, bonsai.OpenFrozen(file).
 
 other:
   version                      print the bonsai version

@@ -17,6 +17,8 @@ package bonsai_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -627,6 +629,202 @@ func TestFeatureAutoDetectNetworkXImport(t *testing.T) {
 	for _, want := range []string{`"gid":"a"`, `"label":"Alice"`, `"label":"Bob"`, `"label":"Carol"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto-imported graph missing %s: %s", want, got)
+		}
+	}
+}
+
+// Freeze + OpenFrozen round-trips the build-once / query-many workflow:
+// build a graph, freeze to a single artifact, open the artifact
+// read-only, query it. Writes against the frozen DB error.
+func TestFeatureFreezeRoundtrip(t *testing.T) {
+	src := t.TempDir()
+	artifact := src + "/graph.bonsai"
+	ctx := context.Background()
+
+	// Build phase.
+	{
+		db, err := bonsai.Open(bonsai.Options{Dir: src})
+		if err != nil {
+			t.Fatalf("Open build: %v", err)
+		}
+		mustAlter(t, db, "name: string @index(exact) .\nfriend: [uid] .\n")
+		mustMutate(t, db, `
+			_:a <name>   "Alice" .
+			_:b <name>   "Bob"   .
+			_:a <friend> _:b .
+		`)
+		_ = db.Close()
+	}
+
+	// Freeze.
+	if err := bonsai.Freeze(src, artifact); err != nil {
+		t.Fatalf("Freeze: %v", err)
+	}
+	fi, err := os.Stat(artifact)
+	if err != nil {
+		t.Fatalf("artifact stat: %v", err)
+	}
+	if fi.Size() == 0 {
+		t.Errorf("frozen artifact is empty")
+	}
+
+	// Open frozen, verify reads work + writes are rejected.
+	db, err := bonsai.OpenFrozen(artifact)
+	if err != nil {
+		t.Fatalf("OpenFrozen: %v", err)
+	}
+	defer db.Close()
+	if !db.ReadOnly() {
+		t.Errorf("frozen DB should be ReadOnly")
+	}
+
+	got := mustQuery(t, db, `{ q(func: has(name)) { name friend { name } } }`)
+	for _, want := range []string{"Alice", "Bob"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("frozen DB missing %s: %s", want, got)
+		}
+	}
+
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{
+		SetNquads: []byte(`_:c <name> "Carol" .`),
+	}); !errors.Is(err, bonsai.ErrReadOnly) {
+		t.Errorf("Mutate on frozen DB: want ErrReadOnly, got %v", err)
+	}
+}
+
+// Options.AutoSchema infers a permissive schema for unknown predicates
+// at Mutate time so callers can write fast-evolving graphs without
+// pre-declaring every edge.
+func TestFeatureAutoSchema(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	db, err := bonsai.Open(bonsai.Options{Dir: dir, AutoSchema: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Mutate without any prior Alter — gid (string) and friend (uid edge)
+	// should both succeed and have schema entries auto-inferred.
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:a <gid>    "alice"  .
+		_:b <gid>    "bob"    .
+		_:a <friend> _:b      .
+	`)}); err != nil {
+		t.Fatalf("Mutate (autoschema): %v", err)
+	}
+	got := mustQuery(t, db, `{ q(func: has(gid)) { gid friend { gid } } }`)
+	if !strings.Contains(got, `"gid":"alice"`) || !strings.Contains(got, `"gid":"bob"`) {
+		t.Errorf("autoschema lost data: %s", got)
+	}
+	if !strings.Contains(got, `"friend":[{"gid":"bob"}]`) {
+		t.Errorf("autoschema didn't recognise uid edge: %s", got)
+	}
+}
+
+// Without AutoSchema, an unknown predicate must still be rejected — the
+// strict default is what schema-careful users rely on.
+func TestFeatureAutoSchemaOffByDefault(t *testing.T) {
+	db := newDB(t) // no AutoSchema
+	_, err := db.Mutate(context.Background(), &apiproto.Mutation{
+		SetNquads: []byte(`_:a <undeclared> "x" .`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "no schema for predicate") {
+		t.Errorf("strict default should reject unknown predicate, got %v", err)
+	}
+}
+
+// Options.ReadOnly opens the DB without write access. Mutate / Alter /
+// Drop must all return ErrReadOnly; Query / Get / ExportTo continue to
+// work. Mirrors the build-once / query-many production deployment shape
+// (the third party freezes a graph artifact and serves it RO).
+func TestFeatureReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Seed the DB with one node, then close.
+	{
+		db, err := bonsai.Open(bonsai.Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("Open seed: %v", err)
+		}
+		mustAlter(t, db, "name: string @index(exact) .\n")
+		mustMutate(t, db, `_:a <name> "Alice" .`)
+		_ = db.Close()
+	}
+
+	// Reopen read-only. Writes are rejected, reads still work.
+	db, err := bonsai.Open(bonsai.Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("Open read-only: %v", err)
+	}
+	defer db.Close()
+	if !db.ReadOnly() {
+		t.Errorf("ReadOnly() should return true")
+	}
+
+	if err := db.Alter(ctx, "age: int .\n"); err == nil || !errors.Is(err, bonsai.ErrReadOnly) {
+		t.Errorf("Alter on RO: want ErrReadOnly, got %v", err)
+	}
+	_, err = db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`_:b <name> "Bob" .`)})
+	if err == nil || !errors.Is(err, bonsai.ErrReadOnly) {
+		t.Errorf("Mutate on RO: want ErrReadOnly, got %v", err)
+	}
+	if err := db.DropAll(ctx); err == nil || !errors.Is(err, bonsai.ErrReadOnly) {
+		t.Errorf("DropAll on RO: want ErrReadOnly, got %v", err)
+	}
+
+	// Reads must still see the seeded data.
+	got := mustQuery(t, db, `{ q(func: has(name)) { name } }`)
+	if !strings.Contains(got, "Alice") {
+		t.Errorf("read on RO missing Alice: %s", got)
+	}
+	if strings.Contains(got, "Bob") {
+		t.Errorf("read on RO leaked Bob (should have been rejected): %s", got)
+	}
+}
+
+// NTX export must be byte-deterministic across runs of the same logical
+// state — this is the property that makes `bonsai diff` meaningful and
+// makes graph snapshots commit-able.
+func TestFeatureExportNTXDeterministic(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	mustAlter(t, db, "name: string @index(exact) .\nfriend: [uid] .\n")
+	mustMutate(t, db, `
+		_:a <name>   "Alice" .
+		_:b <name>   "Bob"   .
+		_:c <name>   "Carol" .
+		_:a <friend> _:b .
+		_:b <friend> _:c .
+		_:a <friend> _:c .
+	`)
+
+	var first, second bytes.Buffer
+	if err := db.ExportTo(ctx, "ntx", &first); err != nil {
+		t.Fatalf("export 1: %v", err)
+	}
+	if err := db.ExportTo(ctx, "ntx", &second); err != nil {
+		t.Fatalf("export 2: %v", err)
+	}
+	if first.String() != second.String() {
+		t.Errorf("ntx export not deterministic.\nfirst:\n%s\nsecond:\n%s",
+			first.String(), second.String())
+	}
+	// Sanity: the dump should contain every name and the friend edges.
+	for _, want := range []string{"Alice", "Bob", "Carol", "<friend>"} {
+		if !strings.Contains(first.String(), want) {
+			t.Errorf("ntx missing %q\n%s", want, first.String())
+		}
+	}
+	// Lines must be sorted by subject UID hex (zero-padded so 0x2 < 0xa).
+	// The export sorts on a 20-hex-digit UID prefix, so even at large UID
+	// counts the order is right.
+	lines := strings.Split(strings.TrimRight(first.String(), "\n"), "\n")
+	for i := 1; i < len(lines); i++ {
+		if lines[i-1] > lines[i] {
+			t.Errorf("ntx not sorted at line %d: %q vs %q",
+				i, lines[i-1], lines[i])
 		}
 	}
 }

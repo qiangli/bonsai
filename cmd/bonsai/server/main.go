@@ -79,6 +79,7 @@ func Main() {
 	traceInsecure := flag.Bool("trace-insecure", true, "skip TLS for OTLP exporters")
 	traceServiceName := flag.String("trace-service-name", "bonsai", "service.name resource attribute")
 	auditLogPath := flag.String("audit-log", "", "audit log file path (JSON lines); empty disables auditing")
+	frozen := flag.String("frozen", "", "path to a .bonsai frozen artifact; opens read-only and ignores --dir")
 	flag.Parse()
 
 	// Wire viper for env (BONSAI_*) + optional YAML config.
@@ -129,9 +130,18 @@ func Main() {
 		log.Printf("audit log: %s", *auditLogPath)
 	}
 
-	db, err := bonsai.Open(bonsai.Options{Dir: *dir, AuditLog: auditLogger})
-	if err != nil {
-		log.Fatalf("bonsai.Open: %v", err)
+	var db *bonsai.DB
+	if *frozen != "" {
+		db, err = bonsai.OpenFrozen(*frozen)
+		if err != nil {
+			log.Fatalf("bonsai.OpenFrozen: %v", err)
+		}
+		log.Printf("opened frozen artifact %s (read-only)", *frozen)
+	} else {
+		db, err = bonsai.Open(bonsai.Options{Dir: *dir, AuditLog: auditLogger})
+		if err != nil {
+			log.Fatalf("bonsai.Open: %v", err)
+		}
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
@@ -495,11 +505,12 @@ func handleExport(db *bonsai.DB) http.HandlerFunc {
 		}
 		download := r.URL.Query().Get("download") == "true" || r.URL.Query().Get("download") == "1"
 		if download {
-			ext := "rdf"
-			ctype := "application/n-quads"
-			if format == "json" {
-				ext = "json"
-				ctype = "application/json"
+			ext, ctype := "rdf", "application/n-quads"
+			switch format {
+			case "json":
+				ext, ctype = "json", "application/json"
+			case "ntx":
+				ext, ctype = "ntx", "application/n-quads"
 			}
 			w.Header().Set("Content-Type", ctype)
 			w.Header().Set("Content-Disposition",

@@ -21,6 +21,7 @@ package bonsai
 
 import (
 	"context"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -65,7 +67,28 @@ type Options struct {
 	// operation (Mutate, Alter, Drop*, namespace, backup, restore). A nil
 	// logger is a cheap no-op at every call site.
 	AuditLog *audit.Logger
+	// ReadOnly opens the DB without write capability. Mutate, Alter, Drop*,
+	// CreateNamespace and the auto-schema mutator path all return an error.
+	// Used by build-once / query-many deployments and by `OpenFrozen`.
+	ReadOnly bool
+	// ValueLogGCInterval controls the background Badger value-log GC cadence.
+	// Default 10 minutes. Set to a negative value to disable; the embedded
+	// caller can then run db.RunValueLogGC manually.
+	ValueLogGCInterval time.Duration
+	// CompactOnClose forces a final L0→bottom compaction during Close so
+	// the on-disk artifact is tight. Useful right after a bulk load and
+	// before producing a frozen artifact.
+	CompactOnClose bool
+	// AutoSchema infers a permissive schema entry on the fly when Mutate
+	// targets an unknown predicate. Edges with a uid object become
+	// `[uid]`; literal-valued edges become `string`. Off by default so
+	// strict-schema users keep their write-time validation; turn on for
+	// schemaless / fast-evolving codebases (e.g. graph-export ingest).
+	AutoSchema bool
 }
+
+// ErrReadOnly is returned from any write path when Options.ReadOnly is true.
+var ErrReadOnly = errors.New("bonsai: database opened read-only")
 
 // DB is an open bonsai database.
 type DB struct {
@@ -80,12 +103,33 @@ type DB struct {
 	// Subscription watchers poll this to detect "something changed" without
 	// the DB needing fan-out plumbing.
 	mutationTick atomic.Uint64
+
+	// gcStop signals the background value-log GC ticker to exit at Close.
+	// nil if Options.ValueLogGCInterval was negative or ReadOnly is set.
+	gcStop chan struct{}
+
+	// frozenTemp is set by OpenFrozen to the temp directory the artifact
+	// was extracted into; removed during Close. Empty for ordinary opens.
+	frozenTemp string
 }
 
 // MutationTick returns a counter that increments on every write or admin
 // op. Subscribers compare ticks across polls to decide whether the
 // underlying state may have changed.
 func (d *DB) MutationTick() uint64 { return d.mutationTick.Load() }
+
+// ReadOnly reports whether this DB was opened in read-only mode.
+func (d *DB) ReadOnly() bool { return d.opts.ReadOnly }
+
+// guardWrite returns ErrReadOnly when the DB was opened with
+// Options.ReadOnly. Callers prepend `if err := d.guardWrite(); err != nil`
+// to every write/admin entry point.
+func (d *DB) guardWrite() error {
+	if d.opts.ReadOnly {
+		return ErrReadOnly
+	}
+	return nil
+}
 
 // NextReadableTs returns the current high-water timestamp — the maximum
 // of the local DB counter and the worker oracle. Callers can capture
@@ -125,6 +169,9 @@ func Open(opts Options) (*DB, error) {
 	// but Badger now tracks the read/write sets and will surface a
 	// y.ErrConflict if the invariant is ever broken.
 	bopts.DetectConflicts = true
+	if opts.ReadOnly {
+		bopts = bopts.WithReadOnly(true).WithBypassLockGuard(true)
+	}
 
 	ps, err := badger.OpenManaged(bopts)
 	if err != nil {
@@ -188,11 +235,46 @@ func Open(opts Options) (*DB, error) {
 	// the current ts don't block in WaitForTs.
 	posting.Oracle().ProcessDelta(&pb.OracleDelta{MaxAssigned: db.tsCount.Load()})
 
-	if err := db.applyInitialSchema(); err != nil {
-		_ = ps.Close()
-		return nil, err
+	if !opts.ReadOnly {
+		if err := db.applyInitialSchema(); err != nil {
+			_ = ps.Close()
+			return nil, err
+		}
+	}
+
+	// Background value-log GC. Default 10 min; negative disables; ReadOnly
+	// short-circuits because Badger errors on RunValueLogGC in read-only.
+	gcInterval := opts.ValueLogGCInterval
+	if gcInterval == 0 {
+		gcInterval = 10 * time.Minute
+	}
+	if gcInterval > 0 && !opts.ReadOnly {
+		db.gcStop = make(chan struct{})
+		go db.valueLogGCLoop(gcInterval)
 	}
 	return db, nil
+}
+
+// valueLogGCLoop periodically asks Badger to reclaim space from the
+// value log. RunValueLogGC returns badger.ErrNoRewrite when nothing to
+// reclaim — that's the steady state, not an error.
+func (d *DB) valueLogGCLoop(interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-d.gcStop:
+			return
+		case <-t.C:
+			// Ratio 0.5: rewrite a vlog file when 50% of its data is
+			// stale. Loop until we hit ErrNoRewrite or anything else.
+			for {
+				if err := d.pstore.RunValueLogGC(0.5); err != nil {
+					break
+				}
+			}
+		}
+	}
 }
 
 // uidCounterKey is the reserved Badger key holding the highest assigned UID.
@@ -266,13 +348,37 @@ func isWriteOp(op string) bool {
 }
 
 // Close flushes and closes the database. It is safe to call multiple times.
+//
+// When Options.CompactOnClose is true, a final L0→bottom Badger flatten
+// runs before the underlying store closes. Callers running build-once /
+// query-many workloads enable this once after their final mutation so
+// the resulting on-disk artifact is tight.
 func (d *DB) Close() error {
 	if !d.closed.CompareAndSwap(false, true) {
 		return nil
 	}
+	if d.gcStop != nil {
+		close(d.gcStop)
+		d.gcStop = nil
+	}
 	posting.Cleanup()
 	worker.BlockingStop()
-	return d.pstore.Close()
+	if d.opts.CompactOnClose && !d.opts.ReadOnly {
+		// Best-effort: a Flatten failure during shutdown is logged but
+		// not surfaced — the user wanted compaction, not a hard error.
+		if err := d.pstore.Flatten(2); err != nil {
+			// Use the package logger pattern via x.ToGlog{}; here we
+			// just swallow because Close is shutdown-time.
+			_ = err
+		}
+	}
+	closeErr := d.pstore.Close()
+	if d.frozenTemp != "" {
+		// Best-effort cleanup of the extracted frozen artifact.
+		_ = os.RemoveAll(d.frozenTemp)
+		d.frozenTemp = ""
+	}
+	return closeErr
 }
 
 // nextTs returns a fresh, locally-monotonic timestamp. Backed by
@@ -310,6 +416,9 @@ func (d *DB) applyInitialSchema() error {
 // the indexes by dropping the old prefixes from Badger and re-tokenising
 // every existing data key.
 func (d *DB) Alter(ctx context.Context, schemaText string) (err error) {
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("Alter", ctx, map[string]any{
 		"schema_bytes": len(schemaText),
 	}, &err)()
@@ -457,6 +566,9 @@ var timeNow = func() time.Time { return time.Now() }
 // patterns (multiple mutations, conditional mutations) require additional
 // glue.
 func (d *DB) Upsert(ctx context.Context, queryDQL string, m *apipb.Mutation) (resp *api.Response, err error) {
+	if err := d.guardWrite(); err != nil {
+		return nil, err
+	}
 	defer d.auditDeferred("Upsert", ctx, map[string]any{
 		"query_bytes":  len(queryDQL),
 		"cond":         m.GetCond(),
@@ -583,6 +695,9 @@ func substVars(rdf []byte, vars map[string]uint64) []byte {
 // On success the returned api.Response.Uids reports the assigned UIDs for
 // each blank node.
 func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (resp *api.Response, err error) {
+	if err := d.guardWrite(); err != nil {
+		return nil, err
+	}
 	defer d.auditDeferred("Mutate", ctx, map[string]any{
 		"set_nquads_bytes":  len(m.GetSetNquads()),
 		"del_nquads_bytes":  len(m.GetDelNquads()),
@@ -649,6 +764,23 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (resp *api.Response, e
 		}
 	}
 
+	// AutoSchema: when Options.AutoSchema is set, infer a permissive
+	// schema for any predicate that hasn't been declared yet. Edges with
+	// a non-empty ObjectId become `[uid]`; everything else becomes
+	// `string`. The inferred schema is the safe default — users can
+	// promote later via an explicit Alter (e.g. add @index, change list
+	// to scalar). This mirrors the upgrade path the auto-detect import
+	// already takes; AutoSchema lifts that mechanism to general Mutate.
+	if d.opts.AutoSchema && len(nquads) > 0 {
+		raw := make([]*apipb.NQuad, 0, len(nquads))
+		for _, t := range nquads {
+			raw = append(raw, t.q)
+		}
+		if err := d.autoSchemaFor(ctx, raw); err != nil {
+			return nil, fmt.Errorf("Mutate: auto-schema: %w", err)
+		}
+	}
+
 	// Substitute blank-node references with fresh UIDs.
 	xidMap := map[string]uint64{}
 	var blanks []string
@@ -699,6 +831,62 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (resp *api.Response, e
 
 func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
 
+// autoSchemaFor scans parsed nquads, identifies predicates not yet in the
+// schema state, and applies a minimal Alter to declare them. Called from
+// Mutate when Options.AutoSchema is true. Predicates already declared are
+// left untouched (so a user-curated schema with @index/@reverse stays
+// authoritative).
+func (d *DB) autoSchemaFor(ctx context.Context, nquads []*apipb.NQuad) error {
+	ns := x.NamespaceFromContext(ctx)
+	state := schema.State()
+	if state == nil {
+		return nil
+	}
+	type inferred struct {
+		predicate string
+		isUid     bool
+	}
+	seen := map[string]inferred{}
+	for _, q := range nquads {
+		if q == nil || q.Predicate == "" {
+			continue
+		}
+		bare := q.Predicate
+		nsAttr := x.NamespaceAttr(ns, bare)
+		if _, ok := state.Get(ctx, nsAttr); ok {
+			continue
+		}
+		isUid := q.ObjectId != ""
+		if existing, dup := seen[bare]; dup {
+			if existing.isUid != isUid {
+				// Predicate appeared as both uid and value within the
+				// same Mutate. Pick the value form; uid is more
+				// restrictive and the user can promote later.
+				existing.isUid = false
+				seen[bare] = existing
+			}
+			continue
+		}
+		seen[bare] = inferred{predicate: bare, isUid: isUid}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	for _, inf := range seen {
+		if inf.isUid {
+			fmt.Fprintf(&sb, "%s: [uid] .\n", inf.predicate)
+		} else {
+			fmt.Fprintf(&sb, "%s: string .\n", inf.predicate)
+		}
+	}
+	// Re-using the public Alter so AutoSchema entries also appear in the
+	// audit log — operators see exactly what predicates the writes
+	// implicitly declared. Mutate already passed guardWrite; the
+	// duplicate check inside Alter is a few-ns no-op.
+	return d.Alter(ctx, sb.String())
+}
+
 // Export writes the database in RDF or JSON form to a directory. The
 // resulting files can be re-loaded via the bulk loader (when restored)
 // or simple RDF replay through Mutate(SetNquads).
@@ -720,19 +908,87 @@ func (d *DB) Export(ctx context.Context, format, dst string) error {
 	return f.Sync()
 }
 
-// ExportTo writes the database in RDF or JSON form to an arbitrary writer
-// (file, HTTP response body, *bytes.Buffer in tests). Same content as
-// Export but doesn't take a path, so callers can stream the dump straight
-// into a network connection.
+// ExportTo writes the database in the requested format to an arbitrary
+// writer (file, HTTP response body, *bytes.Buffer in tests). Format
+// values:
+//
+//	rdf   N-Quads, one triple per line, in Badger's LSM iteration order
+//	json  JSON array of {subject,predicate,value|object_id}
+//	ntx   "Bonsai N-Quads" — canonical N-Quads with deterministic ordering
+//	      (sorted by subject UID, then predicate, then object). Designed
+//	      for `git diff`-friendly snapshots; two ntx exports of the same
+//	      logical state are byte-identical.
 func (d *DB) ExportTo(ctx context.Context, format string, w io.Writer) error {
 	switch format {
 	case "rdf":
 		return d.exportRDF(ctx, w)
 	case "json":
 		return d.exportJSON(ctx, w)
+	case "ntx":
+		return d.exportNTX(ctx, w)
 	default:
-		return fmt.Errorf("Export: unknown format %q (want rdf or json)", format)
+		return fmt.Errorf("Export: unknown format %q (want rdf, json, or ntx)", format)
 	}
+}
+
+// exportNTX emits a canonical, deterministic N-Quads dump. We buffer the
+// triples in memory and sort them by (subject, predicate, object) before
+// writing. This trades streaming for diff-friendliness — fine for the
+// embedded-DB scale (millions of triples max); for huge graphs use the
+// streaming `rdf` format instead.
+func (d *DB) exportNTX(ctx context.Context, w io.Writer) error {
+	readTs := worker.CurrentTs()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
+		readTs = oraTs
+	}
+
+	type triple struct{ subj, line string }
+	var (
+		mu      sync.Mutex
+		triples []triple
+	)
+	stream := d.pstore.NewStreamAt(readTs)
+	stream.Prefix = []byte{x.ByteData}
+	stream.KeyToList = func(key []byte, _ *badger.Iterator) (*badgerpb.KVList, error) {
+		pk, err := x.Parse(key)
+		if err != nil {
+			return nil, err
+		}
+		if !pk.IsData() {
+			return nil, nil
+		}
+		pl, err := posting.GetNoStore(key, readTs)
+		if err != nil {
+			return nil, err
+		}
+		_, attr := x.ParseNamespaceAttr(pk.Attr)
+		_ = pl.Iterate(readTs, 0, func(p *pb.Posting) error {
+			var buf bytes.Buffer
+			emitRDFPosting(&buf, pk.Uid, attr, p)
+			line := buf.String()
+			mu.Lock()
+			triples = append(triples, triple{
+				subj: fmt.Sprintf("0x%020x|%s|%s", pk.Uid, attr, line),
+				line: line,
+			})
+			mu.Unlock()
+			return nil
+		})
+		return nil, nil
+	}
+	stream.Send = func(_ *z.Buffer) error { return nil }
+	if err := stream.Orchestrate(ctx); err != nil {
+		return fmt.Errorf("Export: orchestrate: %w", err)
+	}
+	sort.Slice(triples, func(i, j int) bool {
+		return triples[i].subj < triples[j].subj
+	})
+	for _, t := range triples {
+		if _, err := io.WriteString(w, t.line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
@@ -935,6 +1191,7 @@ func jsonValue(v types.Val) string {
 // Without ACL, anyone with server access can call this; the semantics are
 // "tenant routing", not "tenant isolation with auth".
 func (d *DB) CreateNamespace(ctx context.Context, ns uint64) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("CreateNamespace", ctx, map[string]any{"ns": ns}, &err)()
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -957,6 +1214,7 @@ func (d *DB) CreateNamespace(ctx context.Context, ns uint64) (err error) {
 // DropNamespace tears down a tenant: drops every Badger key prefixed with
 // the namespace, plus the schema and type entries.
 func (d *DB) DropNamespace(ctx context.Context, ns uint64) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("DropNamespace", ctx, map[string]any{"ns": ns}, &err)()
 	if ns == x.RootNamespace {
 		return fmt.Errorf("DropNamespace: cannot drop root namespace")
@@ -1065,6 +1323,7 @@ func (d *DB) writeNamespaceRegistry(nss []uint64) error {
 // DropAll wipes every key from Badger and re-applies the reserved schema.
 // Equivalent to upstream's `Operation{DropAll: true}`.
 func (d *DB) DropAll(ctx context.Context) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("DropAll", ctx, nil, &err)()
 	if err := d.pstore.DropAll(); err != nil {
 		return fmt.Errorf("DropAll: %w", err)
@@ -1080,6 +1339,7 @@ func (d *DB) DropAll(ctx context.Context) (err error) {
 // DropData wipes data while preserving the schema. Drops all DataKey,
 // IndexKey, ReverseKey, CountKey prefixes; keeps SchemaKey + TypeKey.
 func (d *DB) DropData(ctx context.Context) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("DropData", ctx, nil, &err)()
 	prefixes := [][]byte{
 		{x.ByteData},
@@ -1099,6 +1359,7 @@ func (d *DB) DropData(ctx context.Context) (err error) {
 // argument can be the bare name ("name") or already-namespaced
 // ("0-name"); we coerce to the namespaced form here.
 func (d *DB) DropPredicate(ctx context.Context, predicate string) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("DropPredicate", ctx, map[string]any{"predicate": predicate}, &err)()
 	attr := predicate
 	if !looksNamespaced(attr) {
@@ -1126,6 +1387,7 @@ func (d *DB) DropPredicate(ctx context.Context, predicate string) (err error) {
 // data). The type definition is the schema-language `type T { ... }`
 // declaration.
 func (d *DB) DropType(ctx context.Context, typeName string) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("DropType", ctx, map[string]any{"type": typeName}, &err)()
 	if err := schema.State().DeleteType(typeName, d.nextTs()); err != nil {
 		return fmt.Errorf("DropType: %w", err)
@@ -1368,6 +1630,7 @@ func (d *DB) Backup(ctx context.Context, dst string) (err error) {
 // high-water mark, refresh the posting cache (the old in-memory entries
 // point at keys that Prepare dropped), and reload the schema state.
 func (d *DB) RestoreFrom(ctx context.Context, src string) (err error) {
+	if err := d.guardWrite(); err != nil { return err }
 	defer d.auditDeferred("RestoreFrom", ctx, map[string]any{"src": src}, &err)()
 	_ = ctx // ctx is consumed by auditDeferred; the body below doesn't need it
 	f, err := os.Open(src)
