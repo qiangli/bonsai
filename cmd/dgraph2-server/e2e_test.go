@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/http/pprof"
+	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/dgraph-io/dgo/v250"
@@ -126,6 +128,79 @@ func mustGet(t *testing.T, url string) *http.Response {
 		t.Fatalf("GET %s: %v", url, err)
 	}
 	return resp
+}
+
+// TestServerAdmin exercises the new admin endpoints: /admin/state,
+// /admin/draining, /admin/namespace, /admin/export.
+func TestServerAdmin(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	draining := &atomic.Bool{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/alter", handleAlter(db))
+	mux.HandleFunc("/mutate", handleMutate(db))
+	mux.HandleFunc("/admin/state", handleAdminState(db))
+	mux.HandleFunc("/admin/draining", handleAdminDraining(db, draining))
+	mux.HandleFunc("/admin/namespace", handleAdminNamespace(db))
+	mux.HandleFunc("/admin/export", handleExport(db))
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Seed some data.
+	mustPostJSON(t, srv.URL+"/alter", map[string]string{"schema": "name: string @index(exact) .\n"})
+	mustPostBytes(t, srv.URL+"/mutate", "text/plain",
+		[]byte("_:e <name> \"Exportable\" .\n"))
+
+	// /admin/state
+	resp := mustGet(t, srv.URL+"/admin/state")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !bytes.Contains(body, []byte(`"namespaces"`)) {
+		t.Errorf("admin/state missing namespaces: %s", string(body))
+	}
+
+	// /admin/namespace POST + GET
+	resp, _ = http.Post(srv.URL+"/admin/namespace?ns=7", "", nil)
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		t.Errorf("create ns=7: %d %s", resp.StatusCode, string(b))
+	}
+	resp.Body.Close()
+
+	resp = mustGet(t, srv.URL+"/admin/namespace")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !bytes.Contains(body, []byte("7")) {
+		t.Errorf("ns=7 not listed: %s", string(body))
+	}
+
+	// /admin/draining toggle
+	resp, _ = http.Post(srv.URL+"/admin/draining?on=1", "", nil)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !bytes.Contains(body, []byte(`"draining":true`)) {
+		t.Errorf("draining toggle: %s", string(body))
+	}
+
+	// /admin/export RDF
+	dst := dir + "/exported.rdf"
+	resp, _ = http.Post(srv.URL+"/admin/export?format=rdf&path="+dst, "", nil)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("export: %d %s", resp.StatusCode, string(body))
+	}
+	exported, _ := os.ReadFile(dst)
+	if !bytes.Contains(exported, []byte("Exportable")) {
+		t.Errorf("exported RDF missing data: %s", string(exported))
+	}
 }
 
 // TestServerOps exercises /metrics, /admin/schema GET, /debug/pprof.

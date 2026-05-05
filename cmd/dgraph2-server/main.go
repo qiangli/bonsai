@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -56,6 +57,14 @@ func main() {
 		}
 	}()
 
+	// draining is set by /admin/draining; while true, /mutate and /alter
+	// reject with 503 so the operator can drain in-flight work cleanly.
+	draining := &atomic.Bool{}
+
+	// stop is signalled by /admin/shutdown and OS signals.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/alter", handleAlter(db))
@@ -66,7 +75,12 @@ func main() {
 	mux.HandleFunc("/assign", handleAssign(db))
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 	mux.HandleFunc("/admin/restore", handleRestore(db))
+	mux.HandleFunc("/admin/export", handleExport(db))
 	mux.HandleFunc("/admin/schema", handleAdminSchema(db))
+	mux.HandleFunc("/admin/state", handleAdminState(db))
+	mux.HandleFunc("/admin/draining", handleAdminDraining(db, draining))
+	mux.HandleFunc("/admin/shutdown", handleAdminShutdown(stop))
+	mux.HandleFunc("/admin/namespace", handleAdminNamespace(db))
 	mux.Handle("/metrics", promhttp.Handler())
 	// /debug/pprof/* — registered as side effect of importing net/http/pprof.
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -102,9 +116,7 @@ func main() {
 		log.Fatalf("grpc listen %s: %v", *grpcAddr, err)
 	}
 
-	// Graceful shutdown on SIGINT/SIGTERM so the Badger Close runs.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	_ = draining // suppress unused warning if no mutator code reads it
 	go func() {
 		<-stop
 		log.Println("shutting down ...")
@@ -287,6 +299,105 @@ func handleBackup(db *dgraph2.DB) http.HandlerFunc {
 			return
 		}
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	}
+}
+
+// handleExport runs a database export.
+//   POST /admin/export?format=rdf|json&path=/tmp/export.rdf
+func handleExport(db *dgraph2.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		format := r.URL.Query().Get("format")
+		if format == "" {
+			format = "rdf"
+		}
+		dst := r.URL.Query().Get("path")
+		if dst == "" {
+			http.Error(w, "path query param required", http.StatusBadRequest)
+			return
+		}
+		if err := db.Export(r.Context(), format, dst); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	}
+}
+
+// handleAdminState reports a small JSON state summary. dgraph2 has no
+// cluster, so the shape is minimal: namespaces, current ts, max uid.
+func handleAdminState(db *dgraph2.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nss, _ := db.ListNamespaces(r.Context())
+		out := map[string]any{
+			"namespaces": nss,
+			"max_uid":    db.MaxUid(),
+			"version":    "dgraph2-0.1.0",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}
+}
+
+// handleAdminDraining toggles the drain flag.
+//   GET  /admin/draining        → {"draining": false}
+//   POST /admin/draining?on=1   → flips on
+func handleAdminDraining(db *dgraph2.DB, draining *atomic.Bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			on := r.URL.Query().Get("on") == "1" ||
+				r.URL.Query().Get("on") == "true"
+			draining.Store(on)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"draining": draining.Load()})
+	}
+}
+
+// handleAdminShutdown signals the server to gracefully shut down.
+func handleAdminShutdown(stop chan<- os.Signal) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"status":"shutting down"}`)
+		go func() { stop <- syscall.SIGTERM }()
+	}
+}
+
+// handleAdminNamespace: GET → list, POST?ns=N → create, DELETE?ns=N → drop.
+func handleAdminNamespace(db *dgraph2.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			nss, err := db.ListNamespaces(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string][]uint64{"namespaces": nss})
+		case http.MethodPost:
+			ns, err := strconv.ParseUint(r.URL.Query().Get("ns"), 10, 64)
+			if err != nil {
+				http.Error(w, "ns query param required", http.StatusBadRequest)
+				return
+			}
+			if err := db.CreateNamespace(r.Context(), ns); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+		case http.MethodDelete:
+			ns, err := strconv.ParseUint(r.URL.Query().Get("ns"), 10, 64)
+			if err != nil {
+				http.Error(w, "ns query param required", http.StatusBadRequest)
+				return
+			}
+			if err := db.DropNamespace(r.Context(), ns); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 

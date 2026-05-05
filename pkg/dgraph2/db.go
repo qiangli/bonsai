@@ -22,6 +22,7 @@ package dgraph2
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,8 +33,10 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	badgerpb "github.com/dgraph-io/badger/v4/pb"
 	"github.com/dgraph-io/dgo/v250/protos/api"
 	apipb "github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/dgraph-io/ristretto/v2/z"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/qiangli/dgraph2/chunker"
@@ -557,6 +560,150 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 
 func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
 
+// Export writes the database in RDF or JSON form to a directory. The
+// resulting files can be re-loaded via the bulk loader (when restored)
+// or simple RDF replay through Mutate(SetNquads).
+//
+// Format: "rdf" emits N-Quads, one triple per line. "json" emits a JSON
+// array of {subject, predicate, value} records.
+//
+// dgraph2 export is a single-file dump (no group iteration / chunking
+// like upstream); fine for the embedded-DB use case.
+func (d *DB) Export(ctx context.Context, format, dst string) error {
+	switch format {
+	case "rdf":
+		return d.exportRDF(ctx, dst)
+	case "json":
+		return d.exportJSON(ctx, dst)
+	default:
+		return fmt.Errorf("Export: unknown format %q (want rdf or json)", format)
+	}
+}
+
+func (d *DB) exportRDF(ctx context.Context, dst string) error {
+	f, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("Export: create: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	readTs := worker.CurrentTs()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
+		readTs = oraTs
+	}
+
+	// Walk all data keys via Badger stream.
+	stream := d.pstore.NewStreamAt(readTs)
+	stream.Prefix = []byte{x.ByteData}
+	stream.KeyToList = func(key []byte, _ *badger.Iterator) (*badgerpb.KVList, error) {
+		pk, err := x.Parse(key)
+		if err != nil {
+			return nil, err
+		}
+		if !pk.IsData() {
+			return nil, nil
+		}
+		pl, err := posting.GetNoStore(key, readTs)
+		if err != nil {
+			return nil, err
+		}
+		// Bare attribute name without namespace prefix.
+		ns, attr := x.ParseNamespaceAttr(pk.Attr)
+		_ = ns
+		// Read the scalar value (single-value path; lists/multi-value
+		// would need richer iteration).
+		val, err := pl.Value(readTs)
+		if err == nil {
+			line := fmt.Sprintf("<0x%x> <%s> %s .\n",
+				pk.Uid, attr, formatRDFValue(val))
+			_, _ = f.WriteString(line)
+		}
+		return nil, nil
+	}
+	stream.Send = func(_ *z.Buffer) error { return nil }
+	if err := stream.Orchestrate(ctx); err != nil {
+		return fmt.Errorf("Export: orchestrate: %w", err)
+	}
+	return f.Sync()
+}
+
+func (d *DB) exportJSON(ctx context.Context, dst string) error {
+	f, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("Export: create: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString("[")
+	first := true
+
+	readTs := worker.CurrentTs()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
+		readTs = oraTs
+	}
+
+	stream := d.pstore.NewStreamAt(readTs)
+	stream.Prefix = []byte{x.ByteData}
+	stream.KeyToList = func(key []byte, _ *badger.Iterator) (*badgerpb.KVList, error) {
+		pk, err := x.Parse(key)
+		if err != nil {
+			return nil, err
+		}
+		if !pk.IsData() {
+			return nil, nil
+		}
+		pl, err := posting.GetNoStore(key, readTs)
+		if err != nil {
+			return nil, err
+		}
+		_, attr := x.ParseNamespaceAttr(pk.Attr)
+		val, err := pl.Value(readTs)
+		if err != nil {
+			return nil, nil
+		}
+		if !first {
+			_, _ = f.WriteString(",")
+		}
+		first = false
+		_, _ = fmt.Fprintf(f, `{"subject":"0x%x","predicate":%q,"value":%s}`,
+			pk.Uid, attr, jsonValue(val))
+		return nil, nil
+	}
+	stream.Send = func(_ *z.Buffer) error { return nil }
+	if err := stream.Orchestrate(ctx); err != nil {
+		return fmt.Errorf("Export: orchestrate: %w", err)
+	}
+	_, _ = f.WriteString("]")
+	return f.Sync()
+}
+
+func formatRDFValue(v types.Val) string {
+	switch v.Tid {
+	case types.StringID, types.DefaultID:
+		return fmt.Sprintf("%q", string(v.Value.([]byte)))
+	case types.IntID:
+		return fmt.Sprintf(`"%d"^^<xs:int>`, v.Value.(int64))
+	case types.FloatID:
+		return fmt.Sprintf(`"%g"^^<xs:float>`, v.Value.(float64))
+	case types.BoolID:
+		return fmt.Sprintf(`"%v"^^<xs:boolean>`, v.Value.(bool))
+	default:
+		return fmt.Sprintf(`"%v"`, v.Value)
+	}
+}
+
+func jsonValue(v types.Val) string {
+	bin := types.ValueForType(types.StringID)
+	if err := types.Marshal(v, &bin); err != nil {
+		return `null`
+	}
+	if s, ok := bin.Value.(string); ok {
+		// JSON-quote.
+		b, _ := json.Marshal(s)
+		return string(b)
+	}
+	return `null`
+}
+
 // CreateNamespace seeds a new tenant: applies the reserved initial schema
 // for `ns` and tracks it in the namespace registry. Returns an error if
 // the namespace already exists.
@@ -832,6 +979,9 @@ func formatSchemaUpdate(name string, su *pb.SchemaUpdate) string {
 	b.WriteString(" .")
 	return b.String()
 }
+
+// MaxUid returns the current high-water UID. Used by /admin/state.
+func (d *DB) MaxUid() uint64 { return worker.MaxLeaseId() }
 
 // AssignUid hands out a contiguous block of fresh UIDs and persists the new
 // high-water mark to Badger so the counter survives restart.
