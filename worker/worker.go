@@ -30,7 +30,6 @@ import (
 	"sync/atomic"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/dgraph-io/dgo/v250/protos/api"
 
 	"github.com/qiangli/dgraph2/protos/pb"
 	"github.com/qiangli/dgraph2/schema"
@@ -64,11 +63,12 @@ const LimitDefaults = `mutations=allow; query-edge=1000000; normalize-node=10000
 // Options is the runtime configuration for the worker subsystem. ACL,
 // encryption, vault, and CDC fields are gone — dgraph2 is local-only.
 type Options struct {
-	PostingDir    string
-	WALDir        string
-	MyAddr        string
-	HmacSecret    []byte
-	LudicrousMode bool
+	PostingDir         string
+	WALDir             string
+	MyAddr             string
+	HmacSecret         []byte
+	LudicrousMode      bool
+	TypeFilterUidLimit uint64
 }
 
 // Config is the global, mutable worker configuration. Surviving fields are
@@ -114,23 +114,11 @@ func AssignUidsOverNetwork(_ context.Context, num *pb.Num) (*pb.AssignedIds, err
 	return &pb.AssignedIds{StartId: end - num.Val + 1, EndId: end}, nil
 }
 
-// MutateOverNetwork applies a mutation locally. The full implementation
-// (calling embedded.ApplyMutations against the posting store) is deferred
-// until the worker/task.go and worker/mutation.go ports are complete.
-func MutateOverNetwork(_ context.Context, _ *pb.Mutations) (*api.TxnContext, error) {
-	return nil, ErrNotImplemented
-}
+// MutateOverNetwork lives in mutation.go.
 
-// ProcessTaskOverNetwork executes a single-predicate task locally.
-// Deferred — the upstream implementation in `task.go` is ~2,600 lines.
-func ProcessTaskOverNetwork(_ context.Context, _ *pb.Query) (*pb.Result, error) {
-	return nil, ErrNotImplemented
-}
+// ProcessTaskOverNetwork lives in task.go.
 
-// SortOverNetwork sorts UIDs by a predicate locally.
-func SortOverNetwork(_ context.Context, _ *pb.SortMessage) (*pb.SortResult, error) {
-	return nil, ErrNotImplemented
-}
+// SortOverNetwork lives in sort.go.
 
 // GetSchemaOverNetwork looks up schema definitions from the local schema
 // state. Reads the in-memory schema cache populated by Alter.

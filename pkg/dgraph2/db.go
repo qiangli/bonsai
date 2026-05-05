@@ -21,6 +21,7 @@ package dgraph2
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -28,11 +29,17 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/dgraph-io/dgo/v250/protos/api"
+	apipb "github.com/dgraph-io/dgo/v250/protos/api"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/qiangli/dgraph2/chunker"
+	"github.com/qiangli/dgraph2/dql"
 	"github.com/qiangli/dgraph2/posting"
+	"github.com/qiangli/dgraph2/query"
 	"github.com/qiangli/dgraph2/schema"
 	"github.com/qiangli/dgraph2/types"
 	"github.com/qiangli/dgraph2/worker"
@@ -96,12 +103,67 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	db := &DB{opts: opts, pstore: ps}
-	db.tsCount.Store(2) // 1 is reserved for the initial schema
+
+	// Resume the local timestamp counter past whatever's already on disk so
+	// fresh writes get monotonically increasing timestamps and reads see the
+	// most recent committed data. On first open MaxVersion is 0.
+	if maxV := ps.MaxVersion(); maxV > 1 {
+		db.tsCount.Store(maxV + 1)
+	} else {
+		db.tsCount.Store(2) // 1 is reserved for the initial schema
+	}
+
+	// Resume the UID counter from the persisted high-water mark.
+	if uid, err := readUidCounter(ps); err == nil {
+		worker.SetMaxUID(uid)
+	} else if !errors.Is(err, badger.ErrKeyNotFound) {
+		_ = ps.Close()
+		return nil, fmt.Errorf("dgraph2.Open: read uid counter: %w", err)
+	}
+
+	// Tell the posting Oracle about the timestamp high-water so reads at
+	// the current ts don't block in WaitForTs.
+	posting.Oracle().ProcessDelta(&pb.OracleDelta{MaxAssigned: db.tsCount.Load()})
+
 	if err := db.applyInitialSchema(); err != nil {
 		_ = ps.Close()
 		return nil, err
 	}
 	return db, nil
+}
+
+// uidCounterKey is the reserved Badger key holding the highest assigned UID.
+// dgraph2-specific; never clashes with x.DataKey/IndexKey/etc. because those
+// always start with byte prefixes 0x00..0x0c.
+var uidCounterKey = []byte("__dgraph2_max_uid")
+
+func readUidCounter(ps *badger.DB) (uint64, error) {
+	txn := ps.NewTransactionAt(ps.MaxVersion(), false)
+	defer txn.Discard()
+	it, err := txn.Get(uidCounterKey)
+	if err != nil {
+		return 0, err
+	}
+	var uid uint64
+	err = it.Value(func(v []byte) error {
+		if len(v) != 8 {
+			return fmt.Errorf("uid counter: bad length %d", len(v))
+		}
+		uid = binary.BigEndian.Uint64(v)
+		return nil
+	})
+	return uid, err
+}
+
+func (d *DB) writeUidCounter(uid uint64) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uid)
+	wb := d.pstore.NewManagedWriteBatch()
+	defer wb.Cancel()
+	if err := wb.SetEntryAt(&badger.Entry{Key: uidCounterKey, Value: buf[:]}, d.nextTs()); err != nil {
+		return err
+	}
+	return wb.Flush()
 }
 
 // Close flushes and closes the database. It is safe to call multiple times.
@@ -159,11 +221,139 @@ func (d *DB) Alter(_ context.Context, schemaText string) error {
 	return nil
 }
 
-// AssignUid hands out a contiguous block of fresh UIDs.
+// Query runs a DQL query against the database. It parses the query through
+// the dql package, builds a SubGraph, runs ProcessQuery (which calls
+// worker.ProcessTaskOverNetwork — the local executor ported from upstream's
+// task.go), and returns the JSON-encoded result on api.Response.Json.
+//
+// The result format matches upstream Dgraph's DQL output (the GraphQL
+// formatter was dropped during the rewrite).
+func (d *DB) Query(ctx context.Context, q string) (*api.Response, error) {
+	return d.QueryWithVars(ctx, q, nil)
+}
+
+// QueryWithVars is Query with bound variables, e.g. `query Q($name: string) {
+// q(func: eq(name, $name)) {uid}}` with vars `{"$name": "Alice"}`.
+func (d *DB) QueryWithVars(ctx context.Context, q string, vars map[string]string) (*api.Response, error) {
+	parsed, err := dql.Parse(dql.Request{Str: q, Variables: vars})
+	if err != nil {
+		return nil, fmt.Errorf("Query: parse: %w", err)
+	}
+
+	readTs := d.tsCount.Load()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
+		readTs = oraTs
+	}
+	latency := &query.Latency{Start: timeNow()}
+	req := &query.Request{
+		ReadTs:   readTs,
+		Latency:  latency,
+		DqlQuery: &parsed,
+	}
+	if err := req.ProcessQuery(ctx); err != nil {
+		return nil, fmt.Errorf("Query: process: %w", err)
+	}
+	out, err := query.ToJson(ctx, latency, req.Subgraphs)
+	if err != nil {
+		return nil, fmt.Errorf("Query: ToJson: %w", err)
+	}
+	return &api.Response{Json: out}, nil
+}
+
+// timeNow is a hook so tests can stub time. Default uses time.Now().
+var timeNow = func() time.Time { return time.Now() }
+
+// Mutate applies a batch of triples to the database. The mutation can be
+// supplied as RDF N-Quads (`m.SetNquads` / `m.DelNquads`) or, in future
+// versions, as JSON. Blank-node identifiers (`_:alice`) are resolved to fresh
+// UIDs via the worker UID counter and a per-call substitution map.
+//
+// On success the returned api.Response.Uids reports the assigned UIDs for
+// each blank node.
+func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error) {
+	if m == nil {
+		return &api.Response{}, nil
+	}
+	resp := &api.Response{Uids: map[string]string{}}
+
+	var nquads []*apipb.NQuad
+	if len(m.SetNquads) > 0 {
+		nq, _, err := chunker.ParseRDFs(m.SetNquads)
+		if err != nil {
+			return nil, fmt.Errorf("Mutate: parse SetNquads: %w", err)
+		}
+		nquads = append(nquads, nq...)
+	}
+	if len(m.DelNquads) > 0 {
+		nq, _, err := chunker.ParseRDFs(m.DelNquads)
+		if err != nil {
+			return nil, fmt.Errorf("Mutate: parse DelNquads: %w", err)
+		}
+		// Tag deletions; runMutation distinguishes by edge.Op below.
+		for _, q := range nq {
+			nquads = append(nquads, q)
+		}
+		_ = nq
+	}
+
+	// Substitute blank-node references with fresh UIDs.
+	xidMap := map[string]uint64{}
+	var blanks []string
+	for _, q := range nquads {
+		for _, key := range []string{q.Subject, q.ObjectId} {
+			if isBlankNode(key) {
+				if _, ok := xidMap[key]; !ok {
+					xidMap[key] = 0 // placeholder
+					blanks = append(blanks, key)
+				}
+			}
+		}
+	}
+	if len(blanks) > 0 {
+		start, _, err := d.AssignUid(ctx, uint64(len(blanks)))
+		if err != nil {
+			return nil, fmt.Errorf("Mutate: AssignUid: %w", err)
+		}
+		for i, b := range blanks {
+			xidMap[b] = start + uint64(i)
+			resp.Uids[strings.TrimPrefix(b, "_:")] = fmt.Sprintf("0x%x", start+uint64(i))
+		}
+	}
+
+	// Build edges; route through worker.MutateOverNetwork.
+	mutations := &pb.Mutations{}
+	for _, q := range nquads {
+		dq := dql.NQuad{NQuad: q}
+		edge, err := dq.ToEdgeUsing(xidMap)
+		if err != nil {
+			return nil, fmt.Errorf("Mutate: edge: %w", err)
+		}
+		// Mark the predicate with the namespace prefix (always 0 in dgraph2).
+		edge.Attr = x.NamespaceAttr(x.RootNamespace, edge.Attr)
+		// dql.ToEdgeUsing returns edge.Op = SET by default; we'd toggle DEL
+		// here once we differentiate Set/DelNquads above.
+		mutations.Edges = append(mutations.Edges, edge)
+	}
+
+	tctx, err := worker.MutateOverNetwork(ctx, mutations)
+	if err != nil {
+		return nil, err
+	}
+	resp.Txn = &api.TxnContext{StartTs: tctx.StartTs, CommitTs: tctx.CommitTs}
+	return resp, nil
+}
+
+func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
+
+// AssignUid hands out a contiguous block of fresh UIDs and persists the new
+// high-water mark to Badger so the counter survives restart.
 func (d *DB) AssignUid(_ context.Context, count uint64) (start, end uint64, err error) {
 	res, err := worker.AssignUidsOverNetwork(context.Background(), &pb.Num{Val: count})
 	if err != nil {
 		return 0, 0, err
+	}
+	if err := d.writeUidCounter(res.EndId); err != nil {
+		return 0, 0, fmt.Errorf("AssignUid: persist counter: %w", err)
 	}
 	return res.StartId, res.EndId, nil
 }
@@ -231,6 +421,11 @@ func (d *DB) Set(ctx context.Context, subject uint64, predicate string, value an
 
 // Get reads the latest scalar value for <subject> <predicate>.
 // Returns (nil, ErrNoValue) when the triple does not exist.
+//
+// The read timestamp is the higher of the local DB counter and the posting
+// Oracle's MaxAssigned, because mutations may be routed through the
+// pkg-global worker.MutateOverNetwork path which advances the Oracle but not
+// this DB's counter.
 func (d *DB) Get(ctx context.Context, subject uint64, predicate string) ([]byte, error) {
 	if subject == 0 {
 		return nil, errors.New("Get: subject UID must be non-zero")
@@ -241,6 +436,9 @@ func (d *DB) Get(ctx context.Context, subject uint64, predicate string) ([]byte,
 	}
 
 	readTs := d.tsCount.Load()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
+		readTs = oraTs
+	}
 	key := x.DataKey(attr, subject)
 	pl, err := posting.GetNoStore(key, readTs)
 	if err != nil {

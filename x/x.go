@@ -257,22 +257,22 @@ func ExtractNamespaceHTTP(r *http.Request) uint64 {
 	return namespace
 }
 
-// ExtractNamespace parses the namespace value from the incoming gRPC context. For the non-ACL mode,
-// it is caller's responsibility to set the galaxy namespace.
+// ExtractNamespace parses the namespace value from the incoming gRPC context.
+//
+// In dgraph2 we have no ACL/multi-tenancy, so the result is always
+// RootNamespace (= 0). The original gRPC-metadata path is preserved as a
+// fallback in case some upstream code path still attaches the metadata.
 func ExtractNamespace(ctx context.Context) (uint64, error) {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return 0, errors.New("No metadata in the context")
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if ns := md.Get("namespace"); len(ns) > 0 {
+			n, err := strconv.ParseUint(ns[0], 0, 64)
+			if err != nil {
+				return 0, errors.Wrapf(err, "Error while parsing namespace from metadata")
+			}
+			return n, nil
+		}
 	}
-	ns := md.Get("namespace")
-	if len(ns) == 0 {
-		return 0, errors.New("No namespace in the metadata of context")
-	}
-	namespace, err := strconv.ParseUint(ns[0], 0, 64)
-	if err != nil {
-		return 0, errors.Wrapf(err, "Error while parsing namespace from metadata")
-	}
-	return namespace, nil
+	return RootNamespace, nil
 }
 
 func IsRootNsOperation(ctx context.Context) bool {

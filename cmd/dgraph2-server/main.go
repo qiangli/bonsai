@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"syscall"
 
+	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
+
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
 )
 
@@ -47,6 +49,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/alter", handleAlter(db))
+	mux.HandleFunc("/query", handleQuery(db))
+	mux.HandleFunc("/mutate", handleMutate(db))
 	mux.HandleFunc("/set", handleSet(db))
 	mux.HandleFunc("/get", handleGet(db))
 	mux.HandleFunc("/assign", handleAssign(db))
@@ -138,6 +142,60 @@ func handleGet(db *dgraph2.DB) http.HandlerFunc {
 		}
 		_, _ = w.Write(val)
 	}
+}
+
+// handleQuery accepts a DQL query as the request body and returns the JSON
+// response on the wire (so curl just sees the result, not a wrapper object).
+func handleQuery(db *dgraph2.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusBadRequest)
+			return
+		}
+		resp, err := db.Query(r.Context(), string(body))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(resp.Json)
+	}
+}
+
+// handleMutate accepts an RDF SetNquads body (text/plain) and applies it.
+func handleMutate(db *dgraph2.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusBadRequest)
+			return
+		}
+		resp, err := db.Mutate(r.Context(), apiMutation{SetNquads: body}.toApi())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"uids": resp.Uids,
+			"txn": map[string]uint64{
+				"start_ts":  resp.Txn.GetStartTs(),
+				"commit_ts": resp.Txn.GetCommitTs(),
+			},
+		})
+	}
+}
+
+// apiMutation is a tiny shim so we don't have to import the dgo api package
+// at this layer. The test/dev usage is `curl --data-binary @triples.rdf`.
+type apiMutation struct {
+	SetNquads []byte
+	DelNquads []byte
+}
+
+func (m apiMutation) toApi() *apiproto.Mutation {
+	return &apiproto.Mutation{SetNquads: m.SetNquads, DelNquads: m.DelNquads}
 }
 
 func handleAssign(db *dgraph2.DB) http.HandlerFunc {

@@ -35,6 +35,8 @@ func TestServerHTTP(t *testing.T) {
 	mux.HandleFunc("/set", handleSet(db))
 	mux.HandleFunc("/get", handleGet(db))
 	mux.HandleFunc("/assign", handleAssign(db))
+	mux.HandleFunc("/query", handleQuery(db))
+	mux.HandleFunc("/mutate", handleMutate(db))
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 
 	srv := httptest.NewServer(mux)
@@ -47,7 +49,7 @@ func TestServerHTTP(t *testing.T) {
 	}
 
 	// /alter
-	mustPostJSON(t, srv.URL+"/alter", map[string]string{"schema": "name: string .\n"})
+	mustPostJSON(t, srv.URL+"/alter", map[string]string{"schema": "name: string @index(exact) .\n"})
 
 	// /assign
 	resp = mustGet(t, srv.URL+"/assign?n=1")
@@ -82,6 +84,22 @@ func TestServerHTTP(t *testing.T) {
 		t.Errorf("get: want %q, got %q", "Charlie", string(got))
 	}
 
+	// /mutate + /query: full RDF→DQL roundtrip via HTTP.
+	mustPostBytes(t, srv.URL+"/mutate", "text/plain", []byte(
+		"_:zoe <name> \"Zoe\" .\n"))
+	resp = mustPostBytes(t, srv.URL+"/query", "application/dql",
+		[]byte(`{ q(func: eq(name, "Zoe")) { uid name } }`))
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("query: status %d, body=%s", resp.StatusCode, string(b))
+	}
+	qbody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !bytes.Contains(qbody, []byte(`"name":"Zoe"`)) {
+		t.Errorf("query response missing Zoe: %s", string(qbody))
+	}
+
 	// /admin/backup
 	dst := dir + "/backup.bin"
 	resp = mustGet(t, srv.URL+"/admin/backup?path="+dst)
@@ -97,6 +115,15 @@ func mustGet(t *testing.T, url string) *http.Response {
 	resp, err := http.Get(url) //nolint:gosec // test server URL
 	if err != nil {
 		t.Fatalf("GET %s: %v", url, err)
+	}
+	return resp
+}
+
+func mustPostBytes(t *testing.T, url, contentType string, body []byte) *http.Response {
+	t.Helper()
+	resp, err := http.Post(url, contentType, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
 	}
 	return resp
 }
