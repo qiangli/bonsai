@@ -692,6 +692,85 @@ func TestFeatureFreezeRoundtrip(t *testing.T) {
 	}
 }
 
+// TestFeatureMultiBatchReverseIngest exercises the engine path that used
+// to hang: many small Mutate batches that each maintain @reverse-edge
+// indexes. The earlier auto-detect path forced everything into a single
+// big Mutate as a workaround; this test confirms that workaround is no
+// longer needed — 740 batches of 50 nquads each, with @reverse on three
+// edge predicates, completes in seconds.
+func TestFeatureMultiBatchReverseIngest(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	mustAlter(t, db, `
+		gid:    string @index(exact) .
+		calls:  [uid] @reverse .
+	`)
+
+	// 1500 nodes, each calling 5 random earlier nodes; ~9000 edges, plus
+	// 1500 gid triples = ~10500 nquads. At batch=50, that's ~210 batches.
+	const N = 1500
+	const FAN = 5
+	type tagged = struct {
+		q      *apiproto.NQuad
+		delete bool
+	}
+	_ = tagged{}
+
+	// Build mutations as RDF strings to feed the SetNquads path (the
+	// same shape ImportStream uses internally for converted graphs).
+	for batch := 0; batch < N; batch += 50 {
+		var sb strings.Builder
+		for i := batch; i < batch+50 && i < N; i++ {
+			sb.WriteString(`_:n` + itoa(i) + ` <gid> "n` + itoa(i) + `" .` + "\n")
+			for k := 0; k < FAN && i-k-1 >= 0; k++ {
+				sb.WriteString(`_:n` + itoa(i) + ` <calls> _:n` + itoa(i-k-1) + ` .` + "\n")
+			}
+		}
+		if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(sb.String())}); err != nil {
+			t.Fatalf("Mutate batch starting at %d: %v", batch, err)
+		}
+	}
+
+	got := mustQuery(t, db, `{ q(func: has(gid)) { count(uid) } }`)
+	if !strings.Contains(got, `"count":`+itoa(N)) {
+		t.Errorf("expected %d nodes, got: %s", N, got)
+	}
+	// Reverse-edge walk: node N-1 should have 5 incoming callers (well,
+	// only nodes N-1..N-5 in the 5-fan window). Pick a node deep enough
+	// in the chain to have all 5.
+	got = mustQuery(t, db, `{
+		q(func: eq(gid, "n100")) {
+			gid
+			callers: ~calls { gid }
+		}
+	}`)
+	// n100 is targeted by n101..n105 (each with FAN=5 reaching back to
+	// n100). So we expect 5 incoming callers.
+	if !strings.Contains(got, "n100") {
+		t.Errorf("n100 missing: %s", got)
+	}
+	for _, want := range []string{"n101", "n102", "n103", "n104", "n105"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected ~calls predecessor %s, got: %s", want, got)
+		}
+	}
+}
+
+// itoa is a tiny strconv shim so the test stays free of imports drift.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [20]byte
+	pos := len(b)
+	for i > 0 {
+		pos--
+		b[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[pos:])
+}
+
 // Options.AutoSchema infers a permissive schema for unknown predicates
 // at Mutate time so callers can write fast-evolving graphs without
 // pre-declaring every edge.

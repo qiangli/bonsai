@@ -111,6 +111,10 @@ func main() {
 		// `bonsai freeze <data-dir> -o <out.bonsai>` — produce a
 		// single-file read-only artifact. Local-only.
 		runWithArgv("bonsai freeze", rest, tools.FreezeMain)
+	case sub == "import-gfy":
+		// `bonsai import-gfy <repo-or-graph.json>` — one-shot ingest of
+		// a gfy code-knowledge graph. Local-only (opens DB directly).
+		runWithArgv("bonsai import-gfy", rest, tools.ImportGfyMain)
 	case cliSubs[sub]:
 		// Re-include the subcommand so cli's own dispatch sees it as
 		// flag.Args()[0].
@@ -164,6 +168,11 @@ local utilities:
                                into a single .bonsai artifact. Open it
                                read-only with bonsai server --frozen
                                or, in Go, bonsai.OpenFrozen(file).
+  import-gfy <repo>            one-shot ingest of a gfy code-knowledge
+                               graph (.gfy-out/graph.json). Detects the
+                               format, ingests, enriches the inferred
+                               schema with @reverse / @index where
+                               predicate names match common conventions.
 
 other:
   version                      print the bonsai version

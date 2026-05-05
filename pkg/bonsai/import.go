@@ -89,15 +89,6 @@ func ImportStream(ctx context.Context, db *DB, format string, r io.Reader, batch
 			r = bytes.NewReader(conv.RDF)
 			inputFormat = chunker.RdfFormat
 			detected = kind.String()
-			// The whole document is already in memory after conversion, and
-			// per-batch overhead with @reverse-edge maintenance scales
-			// poorly past a few thousand nodes (37K nquads × 37 batches
-			// hangs >60s; same nquads in a single batch lands in ~150 ms).
-			// One big batch is the right shape for an auto-detected
-			// graph import.
-			if int64(len(conv.RDF)) > int64(batchSize) {
-				batchSize = len(conv.RDF) // chunker batches by nquad count, not bytes; this is a safe upper bound
-			}
 		} else {
 			r = sniffed
 			inputFormat = chunker.JsonFormat

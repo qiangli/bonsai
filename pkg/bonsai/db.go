@@ -468,6 +468,12 @@ func (d *DB) Alter(ctx context.Context, schemaText string) (err error) {
 			return fmt.Errorf("Alter: persist type %q: %w", tu.GetTypeName(), err)
 		}
 	}
+	// Publish the new high-water mark to the posting Oracle. Without this,
+	// a Query issued after Alter picks readTs >= ts but Oracle.MaxAssigned
+	// is still at the previous Mutate's commit ts, so processTask blocks
+	// in WaitForTs forever. Same pattern as the Mutate-failure path
+	// patched earlier in worker/mutation.go.
+	posting.Oracle().ProcessDelta(&pb.OracleDelta{MaxAssigned: ts})
 	return nil
 }
 
