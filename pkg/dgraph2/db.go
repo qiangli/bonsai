@@ -230,12 +230,13 @@ func (d *DB) Alter(ctx context.Context, schemaText string) error {
 		su = setNamespaceIfMissing(su, x.RootNamespace)
 
 		// Snapshot the old schema BEFORE we overwrite it; needed to decide
-		// whether indexes have to be rebuilt.
-		old, hadOld := schema.State().Get(ctx, su.Predicate)
+		// whether indexes have to be rebuilt. We `proto.Clone` rather than
+		// take an address of the value the schema state hands us, because
+		// pb.SchemaUpdate embeds a sync.Mutex via the proto runtime and
+		// `&value` would be a copylocks vet warning.
 		var oldPtr *pb.SchemaUpdate
-		if hadOld {
-			oc := old
-			oldPtr = &oc
+		if old, ok := schema.State().Get(ctx, su.Predicate); ok {
+			oldPtr = proto.Clone(&old).(*pb.SchemaUpdate)
 		}
 
 		if err := d.persistSchemaUpdate(su, ts); err != nil {
