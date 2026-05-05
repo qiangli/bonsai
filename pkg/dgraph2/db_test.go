@@ -286,6 +286,41 @@ func TestMutateRDF(t *testing.T) {
 	}
 }
 
+// TestAlterRebuildsIndex exercises the index-rebuild path: insert untagged
+// data, then add an @index(exact) directive via Alter, then query. The query
+// must succeed because Alter triggered a backfill of the index.
+func TestAlterRebuildsIndex(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.Alter(ctx, "name: string .\n"); err != nil {
+		t.Fatalf("Alter (no index): %v", err)
+	}
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{
+		SetNquads: []byte(`_:carol <name> "Carol" .`),
+	}); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+
+	// Add the index AFTER data is inserted. Alter must rebuild.
+	if err := db.Alter(ctx, "name: string @index(exact) .\n"); err != nil {
+		t.Fatalf("Alter (with index): %v", err)
+	}
+
+	resp, err := db.Query(ctx, `{ q(func: eq(name, "Carol")) { uid name } }`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if !strings.Contains(string(resp.Json), `"name":"Carol"`) {
+		t.Errorf("index-rebuild query missing Carol: %s", string(resp.Json))
+	}
+}
+
 // TestDQLQuery is the headline e2e test: ingest RDF, then read it back via
 // a DQL query exercising eq() and predicate expansion. This is the path that
 // goes through dql parsing -> SubGraph -> worker.ProcessTaskOverNetwork ->

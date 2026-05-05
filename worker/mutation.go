@@ -248,25 +248,40 @@ func updateTypeLocal(tu *pb.TypeUpdate, ts uint64) error {
 	return w.Flush()
 }
 
-// nextLocalTs hands out timestamps for mutations. Stays in worker so the
-// posting layer's Oracle can be advanced consistently. dgraph2's pkg/dgraph2
-// has its own counter for the user-facing API; both must stay aligned with
-// pstore.MaxVersion. We use a process-global atomic counter seeded by the
-// posting Oracle's MaxAssigned.
+// localTs is the single source of truth for transaction timestamps in
+// dgraph2. We never call posting.Oracle().ProcessDelta concurrently — the
+// Oracle uses a CompareAndSwap on its maxAssigned counter and asserts on
+// failure, so racing ProcessDelta calls panic. We advance the Oracle
+// serially, only after CommitToDisk completes.
+var localTs uint64
+
+// nextLocalTs returns a fresh timestamp. Both startTs and commitTs allocate
+// from this counter, ensuring commitTs > startTs naturally.
+//
+// At Open time, pkg/dgraph2 seeds localTs from pstore.MaxVersion+1; from
+// then on, mutationMu serialises increments so concurrent mutations don't
+// reuse a timestamp.
 func nextLocalTs() uint64 {
-	for {
-		cur := posting.Oracle().MaxAssigned()
-		next := cur + 1
-		// We don't have a CAS on MaxAssigned, so just announce the new
-		// timestamp to the Oracle by recording a phantom delta. Subsequent
-		// commits will overwrite this with their real commitTs.
-		posting.Oracle().ProcessDelta(&pb.OracleDelta{MaxAssigned: next})
-		if posting.Oracle().MaxAssigned() >= next {
-			return next
-		}
-	}
+	return atomic.AddUint64(&localTs, 1)
 }
 
-// Compile-time guarantee that we're using atomic from somewhere; satisfies
-// the linter when nextLocalTs is the only export.
-var _ = atomic.LoadUint64
+// NextTs is the public version of nextLocalTs, exposed so pkg/dgraph2 can
+// share the same atomic counter for its non-Mutate write paths
+// (DB.Set, DB.Alter, DB.AssignUid persistence). Keeping a single counter
+// avoids the dual-counter bug where reads at d.tsCount blocked forever in
+// Oracle.WaitForTs because worker had advanced past it.
+func NextTs() uint64 {
+	return atomic.AddUint64(&localTs, 1)
+}
+
+// CurrentTs returns the current high-water without advancing it.
+func CurrentTs() uint64 {
+	return atomic.LoadUint64(&localTs)
+}
+
+// SeedLocalTs is called by pkg/dgraph2.Open to seed the local timestamp
+// counter from the recovered Badger MaxVersion. Must be called before any
+// mutation is processed.
+func SeedLocalTs(ts uint64) {
+	atomic.StoreUint64(&localTs, ts)
+}

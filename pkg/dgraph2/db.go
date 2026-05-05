@@ -94,6 +94,12 @@ func Open(opts Options) (*DB, error) {
 		return nil, fmt.Errorf("dgraph2.Open: badger open failed: %w", err)
 	}
 
+	// IndexRebuild uses os.MkdirTemp(x.WorkerConfig.TmpDir, ...) with TmpDir
+	// blank by default. Set it to the OS temp dir so rebuild paths work.
+	if x.WorkerConfig.TmpDir == "" {
+		x.WorkerConfig.TmpDir = os.TempDir()
+	}
+
 	worker.Init(ps)
 	posting.Init(ps, opts.CacheMB<<20, false /* removeOnUpdate */)
 	schema.Init(ps)
@@ -107,11 +113,12 @@ func Open(opts Options) (*DB, error) {
 	// Resume the local timestamp counter past whatever's already on disk so
 	// fresh writes get monotonically increasing timestamps and reads see the
 	// most recent committed data. On first open MaxVersion is 0.
-	if maxV := ps.MaxVersion(); maxV > 1 {
-		db.tsCount.Store(maxV + 1)
-	} else {
-		db.tsCount.Store(2) // 1 is reserved for the initial schema
+	seed := ps.MaxVersion()
+	if seed < 1 {
+		seed = 1 // 1 is reserved for the initial schema
 	}
+	db.tsCount.Store(seed)
+	worker.SeedLocalTs(seed)
 
 	// Resume the UID counter from the persisted high-water mark.
 	if uid, err := readUidCounter(ps); err == nil {
@@ -176,9 +183,16 @@ func (d *DB) Close() error {
 	return d.pstore.Close()
 }
 
-// nextTs returns a fresh, locally-monotonic timestamp. Replaces the Zero
-// Oracle's distributed timestamp service.
-func (d *DB) nextTs() uint64 { return d.tsCount.Add(1) }
+// nextTs returns a fresh, locally-monotonic timestamp. Backed by
+// worker.NextTs so the worker.MutateOverNetwork path and pkg/dgraph2's
+// direct Set path share a single, monotonically increasing counter. Reads
+// in Get/Query that take readTs from this counter will always see prior
+// commits without blocking in Oracle.WaitForTs.
+func (d *DB) nextTs() uint64 {
+	ts := worker.NextTs()
+	d.tsCount.Store(ts)
+	return ts
+}
 
 // applyInitialSchema seeds the reserved predicates and types that upstream
 // Dgraph applies at startup. We use a fixed timestamp of 1 here.
@@ -199,7 +213,11 @@ func (d *DB) applyInitialSchema() error {
 
 // Alter applies a schema string. The string follows DQL schema syntax,
 // e.g.: `name: string @index(exact) . age: int .`
-func (d *DB) Alter(_ context.Context, schemaText string) error {
+//
+// When a predicate's index/reverse/count directives change, Alter rebuilds
+// the indexes by dropping the old prefixes from Badger and re-tokenising
+// every existing data key.
+func (d *DB) Alter(ctx context.Context, schemaText string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -209,8 +227,34 @@ func (d *DB) Alter(_ context.Context, schemaText string) error {
 	}
 	ts := d.nextTs()
 	for _, su := range parsed.Preds {
-		if err := d.persistSchema(su, ts); err != nil {
+		su = setNamespaceIfMissing(su, x.RootNamespace)
+
+		// Snapshot the old schema BEFORE we overwrite it; needed to decide
+		// whether indexes have to be rebuilt.
+		old, hadOld := schema.State().Get(ctx, su.Predicate)
+		var oldPtr *pb.SchemaUpdate
+		if hadOld {
+			oc := old
+			oldPtr = &oc
+		}
+
+		if err := d.persistSchemaUpdate(su, ts); err != nil {
 			return fmt.Errorf("Alter: persist predicate %q: %w", su.Predicate, err)
+		}
+
+		rb := posting.IndexRebuild{
+			Attr:          su.Predicate,
+			StartTs:       ts,
+			OldSchema:     oldPtr,
+			CurrentSchema: su,
+		}
+		if rb.NeedIndexRebuild() {
+			if err := rb.DropIndexes(ctx); err != nil {
+				return fmt.Errorf("Alter: drop indexes for %q: %w", su.Predicate, err)
+			}
+			if err := rb.BuildIndexes(ctx); err != nil {
+				return fmt.Errorf("Alter: build indexes for %q: %w", su.Predicate, err)
+			}
 		}
 	}
 	for _, tu := range parsed.Types {
@@ -219,6 +263,25 @@ func (d *DB) Alter(_ context.Context, schemaText string) error {
 		}
 	}
 	return nil
+}
+
+// persistSchemaUpdate is persistSchema without the namespace coercion;
+// callers must pre-namespace su.Predicate.
+func (d *DB) persistSchemaUpdate(su *pb.SchemaUpdate, ts uint64) error {
+	curr, ok := schema.State().Get(context.Background(), su.Predicate)
+	if ok && schemaEqual(&curr, su) {
+		return nil
+	}
+	schema.State().Set(su.Predicate, su)
+	w := posting.NewTxnWriter(d.pstore)
+	val, err := proto.Marshal(su)
+	if err != nil {
+		return err
+	}
+	if err := w.SetAt(x.SchemaKey(su.Predicate), val, posting.BitSchemaPosting, ts); err != nil {
+		return err
+	}
+	return w.Flush()
 }
 
 // Query runs a DQL query against the database. It parses the query through
