@@ -39,6 +39,7 @@ import (
 	"github.com/qiangli/dgraph2/pkg/audit"
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
 	"github.com/qiangli/dgraph2/pkg/graphql"
+	"github.com/qiangli/dgraph2/pkg/ui"
 )
 
 // version is set at build time via -ldflags "-X main.version=...". It's
@@ -157,6 +158,9 @@ func main() {
 	mux.HandleFunc("/abort", handleAbort())
 	mux.HandleFunc("/graphql", graphql.Handler(db))
 	mux.HandleFunc("/graphql/subscribe", graphql.SubscriptionHandler(db))
+	mux.Handle("/ui", ui.Handler())
+	mux.Handle("/ui/", ui.Handler())
+	mux.Handle("/", ui.Handler())
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 	mux.HandleFunc("/admin/restore", handleRestore(db))
 	mux.HandleFunc("/admin/export", handleExport(db))

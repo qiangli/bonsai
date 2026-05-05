@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<!--
+  dgraph2 Explorer — minimal single-page UI for DB introspection.
+  Vanilla HTML+JS, no build, no framework. Embedded via go:embed and
+  served at / by dgraph2-server. Talks only to the same-origin endpoints
+  (/admin/schema, /admin/state, /query, /graphql), so there are no CORS
+  or auth surprises beyond what the surrounding deployment already does.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>dgraph2 Explorer</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; color: #222; background: #fafafa; }
+    header { background: #1a1f29; color: #f0f0f0; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; }
+    header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    header .meta { font-size: 12px; opacity: 0.7; }
+    main { display: grid; grid-template-columns: 260px 1fr; height: calc(100vh - 44px); }
+    aside { background: #fff; border-right: 1px solid #e5e5e5; overflow-y: auto; padding: 12px 14px; }
+    aside h2 { font-size: 12px; text-transform: uppercase; color: #888; margin: 16px 0 6px 0; letter-spacing: 0.5px; }
+    aside ul { list-style: none; padding: 0; margin: 0; }
+    aside li { padding: 4px 0; cursor: pointer; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: #333; word-break: break-all; }
+    aside li:hover { color: #2563eb; }
+    aside li small { color: #888; font-size: 11px; }
+    section.work { display: flex; flex-direction: column; gap: 10px; padding: 12px; min-width: 0; }
+    .panel { background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; }
+    .panel header { background: #f0f2f5; color: #444; padding: 6px 10px; border-bottom: 1px solid #e5e5e5; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
+    .panel header .actions { display: flex; gap: 6px; }
+    .panel header button, .panel header select, .panel header input { font-size: 12px; padding: 3px 8px; border: 1px solid #d0d0d0; border-radius: 3px; background: #fff; cursor: pointer; }
+    .panel header button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+    .panel header button:hover { background: #f5f5f5; }
+    .panel header button.primary:hover { background: #1d4ed8; }
+    textarea, pre { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+    textarea { width: 100%; border: none; outline: none; resize: vertical; padding: 10px; min-height: 140px; }
+    pre.result { padding: 10px; margin: 0; max-height: 50vh; overflow: auto; background: #fafafa; }
+    .filter-row { display: flex; gap: 6px; padding: 8px 10px; align-items: center; border-bottom: 1px solid #e5e5e5; flex-wrap: wrap; }
+    .filter-row label { font-size: 12px; color: #555; }
+    .filter-row select, .filter-row input { font-size: 13px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 3px; }
+    .status { font-size: 12px; color: #666; padding: 4px 10px; }
+    .status.error { color: #b91c1c; }
+    .tag { display: inline-block; background: #eef; color: #335; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>dgraph2 Explorer</h1>
+    <div class="meta">
+      <span id="meta-version">…</span>
+      &nbsp;|&nbsp;
+      <span>ns: <select id="namespace-select"><option value="0">0 (root)</option></select></span>
+    </div>
+  </header>
+  <main>
+    <aside>
+      <h2>Predicates</h2>
+      <ul id="schema-list"><li><small>loading…</small></li></ul>
+      <h2>Types</h2>
+      <ul id="type-list"><li><small>loading…</small></li></ul>
+    </aside>
+    <section class="work">
+      <div class="panel">
+        <header>
+          <span>Quick Filter</span>
+        </header>
+        <div class="filter-row">
+          <label>predicate</label>
+          <select id="filter-pred"><option value="">(pick one)</option></select>
+          <label>op</label>
+          <select id="filter-op">
+            <option value="has">has(p)</option>
+            <option value="eq">eq(p, v)</option>
+            <option value="ge">ge(p, v)</option>
+            <option value="le">le(p, v)</option>
+          </select>
+          <label>value</label>
+          <input id="filter-val" placeholder="(value, only for eq/ge/le)" size="22">
+          <label>limit</label>
+          <input id="filter-limit" type="number" value="50" min="1" max="10000" style="width: 70px">
+          <button id="filter-run" class="">Build &amp; Run</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <header>
+          <span>Query (DQL)</span>
+          <div class="actions">
+            <button id="query-clear">Clear</button>
+            <button id="query-run" class="primary">Run ▶</button>
+          </div>
+        </header>
+        <textarea id="query-text">{ q(func: has(name), first: 10) {
+  uid
+  name
+} }</textarea>
+        <div class="status" id="query-status"></div>
+      </div>
+
+      <div class="panel">
+        <header>
+          <span>Result</span>
+          <div class="actions">
+            <button id="copy-result">Copy</button>
+          </div>
+        </header>
+        <pre id="result" class="result">(no query yet)</pre>
+      </div>
+    </section>
+  </main>
+
+<script>
+'use strict';
+
+// Helpers — same-origin fetch wrappers and small DOM utilities.
+const $ = id => document.getElementById(id);
+
+async function fetchJSON(url, opts) {
+  const resp = await fetch(url, opts);
+  const text = await resp.text();
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}: ${text}`);
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+// Strip the 8-byte namespace prefix that dgraph2 adds to every predicate.
+// The schema endpoint returns predicates like "<8 bytes><name>"; for
+// display we only want "name".
+function stripNs(p) {
+  if (!p) return p;
+  if (p.length < 8) return p;
+  return p.substring(8);
+}
+
+// loadSchema fetches /admin/schema (text DQL form), parses it into
+// predicate + type lists, and renders them in the sidebar.
+async function loadSchema() {
+  try {
+    const text = await fetchJSON('/admin/schema');
+    const lines = (typeof text === 'string' ? text : '').split('\n');
+    const preds = [];
+    const types = [];
+    let inType = null;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const typeStart = line.match(/^type\s+(\S+)\s*\{/);
+      if (typeStart) { inType = { name: typeStart[1], fields: [] }; continue; }
+      if (inType) {
+        if (line === '}') { types.push(inType); inType = null; continue; }
+        const fld = line.replace(/[.,]+$/, '').trim();
+        if (fld) inType.fields.push(fld);
+        continue;
+      }
+      // predicate line: "name: type @directives ."
+      const m = line.match(/^([^:]+):\s*([^.]+)\./);
+      if (m) preds.push({ name: stripNs(m[1].trim()), defn: m[2].trim() });
+    }
+    renderPredicates(preds);
+    renderTypes(types);
+    populateFilterPredicates(preds);
+  } catch (e) {
+    $('schema-list').innerHTML = `<li><small style="color:#b91c1c">${e.message}</small></li>`;
+  }
+}
+
+function renderPredicates(preds) {
+  const ul = $('schema-list');
+  if (!preds.length) { ul.innerHTML = '<li><small>(none)</small></li>'; return; }
+  ul.innerHTML = '';
+  for (const p of preds) {
+    const li = document.createElement('li');
+    li.title = p.defn;
+    li.innerHTML = `${p.name} <small>${p.defn}</small>`;
+    li.onclick = () => insertIntoQuery(p.name);
+    ul.appendChild(li);
+  }
+}
+
+function renderTypes(types) {
+  const ul = $('type-list');
+  if (!types.length) { ul.innerHTML = '<li><small>(none)</small></li>'; return; }
+  ul.innerHTML = '';
+  for (const t of types) {
+    const li = document.createElement('li');
+    li.title = t.fields.join(', ');
+    li.innerHTML = `${t.name} <small>(${t.fields.length} fields)</small>`;
+    li.onclick = () => useTypeQuery(t);
+    ul.appendChild(li);
+  }
+}
+
+function populateFilterPredicates(preds) {
+  const sel = $('filter-pred');
+  sel.innerHTML = '<option value="">(pick one)</option>';
+  for (const p of preds) {
+    const opt = document.createElement('option');
+    opt.value = p.name; opt.textContent = p.name;
+    sel.appendChild(opt);
+  }
+}
+
+// insertIntoQuery dumps the predicate name at the cursor of the query
+// textarea — handy for clicking on the sidebar to build queries.
+function insertIntoQuery(name) {
+  const t = $('query-text');
+  const start = t.selectionStart, end = t.selectionEnd;
+  t.value = t.value.substring(0, start) + name + t.value.substring(end);
+  t.focus();
+  t.selectionStart = t.selectionEnd = start + name.length;
+}
+
+function useTypeQuery(t) {
+  $('query-text').value =
+    `{ q(func: type(${t.name}), first: 50) {\n` +
+    `  uid\n  ` + t.fields.map(f => f.split(/\s+/)[0]).join('\n  ') +
+    `\n} }`;
+}
+
+async function runQuery() {
+  const q = $('query-text').value;
+  $('query-status').className = 'status';
+  $('query-status').textContent = 'running…';
+  const t0 = performance.now();
+  try {
+    const resp = await fetch('/query', { method: 'POST', body: q });
+    const text = await resp.text();
+    const dt = (performance.now() - t0).toFixed(0);
+    if (!resp.ok) throw new Error(`${resp.status}: ${text}`);
+    let pretty;
+    try { pretty = JSON.stringify(JSON.parse(text), null, 2); }
+    catch { pretty = text; }
+    $('result').textContent = pretty;
+    let count = 0;
+    try {
+      const obj = JSON.parse(text);
+      if (obj && Array.isArray(obj.q)) count = obj.q.length;
+    } catch {}
+    $('query-status').textContent = `done in ${dt}ms · ${count} rows`;
+  } catch (e) {
+    $('query-status').className = 'status error';
+    $('query-status').textContent = e.message;
+  }
+}
+
+function buildFilterQuery() {
+  const pred = $('filter-pred').value;
+  const op = $('filter-op').value;
+  const val = $('filter-val').value;
+  const limit = $('filter-limit').value || 50;
+  if (!pred) { $('query-status').textContent = 'pick a predicate first'; return; }
+  let func;
+  if (op === 'has') {
+    func = `has(${pred})`;
+  } else {
+    if (!val) { $('query-status').textContent = 'op needs a value'; return; }
+    const isNum = /^-?\d+(\.\d+)?$/.test(val);
+    const formatted = isNum ? val : JSON.stringify(val);
+    func = `${op}(${pred}, ${formatted})`;
+  }
+  $('query-text').value = `{ q(func: ${func}, first: ${limit}) {\n  uid\n  ${pred}\n} }`;
+  runQuery();
+}
+
+async function loadState() {
+  try {
+    const s = await fetchJSON('/admin/state');
+    $('meta-version').textContent = s.version || 'dgraph2';
+    const sel = $('namespace-select');
+    sel.innerHTML = '';
+    for (const ns of (s.namespaces || [0])) {
+      const opt = document.createElement('option');
+      opt.value = ns;
+      opt.textContent = ns === 0 ? `${ns} (root)` : String(ns);
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    $('meta-version').textContent = 'dgraph2 (state unavailable)';
+  }
+}
+
+// Wire up button handlers and keyboard shortcuts.
+$('query-run').onclick = runQuery;
+$('query-clear').onclick = () => { $('query-text').value = ''; $('query-text').focus(); };
+$('filter-run').onclick = buildFilterQuery;
+$('copy-result').onclick = () => navigator.clipboard.writeText($('result').textContent || '');
+$('query-text').addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runQuery(); }
+});
+
+// Boot.
+loadState();
+loadSchema();
+</script>
+</body>
+</html>
