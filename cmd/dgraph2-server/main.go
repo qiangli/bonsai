@@ -37,6 +37,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/dgraph2/pkg/graphql"
 )
 
 // version is set at build time via -ldflags "-X main.version=...". It's
@@ -129,6 +130,7 @@ func main() {
 	mux.HandleFunc("/assign", handleAssign(db))
 	mux.HandleFunc("/commit", handleCommit())
 	mux.HandleFunc("/abort", handleAbort())
+	mux.HandleFunc("/graphql", graphql.Handler(db))
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 	mux.HandleFunc("/admin/restore", handleRestore(db))
 	mux.HandleFunc("/admin/export", handleExport(db))
