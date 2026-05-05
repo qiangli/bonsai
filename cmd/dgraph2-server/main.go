@@ -156,6 +156,7 @@ func main() {
 	mux.HandleFunc("/commit", handleCommit())
 	mux.HandleFunc("/abort", handleAbort())
 	mux.HandleFunc("/graphql", graphql.Handler(db))
+	mux.HandleFunc("/graphql/subscribe", graphql.SubscriptionHandler(db))
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 	mux.HandleFunc("/admin/restore", handleRestore(db))
 	mux.HandleFunc("/admin/export", handleExport(db))

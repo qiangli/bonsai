@@ -74,7 +74,18 @@ type DB struct {
 	opts    Options
 	pstore  *badger.DB
 	tsCount atomic.Uint64 // local monotonic timestamp generator (replaces Zero Oracle)
+
+	// mutationTick advances on every successful or attempted write op
+	// (Mutate, Upsert, Drop*, RestoreFrom, BackupTo with side effects).
+	// Subscription watchers poll this to detect "something changed" without
+	// the DB needing fan-out plumbing.
+	mutationTick atomic.Uint64
 }
+
+// MutationTick returns a counter that increments on every write or admin
+// op. Subscribers compare ticks across polls to decide whether the
+// underlying state may have changed.
+func (d *DB) MutationTick() uint64 { return d.mutationTick.Load() }
 
 // Open opens (or creates) a dgraph2 database at the given directory.
 //
@@ -207,22 +218,39 @@ func (d *DB) writeUidCounter(uid uint64) error {
 }
 
 // auditDeferred returns a closure suitable for `defer ...()` that records
-// the operation's final error and elapsed time into the audit log. Pass a
-// pointer to the function's named-return error so the deferred function
-// observes its post-update value. When AuditLog is nil the closure is a
-// no-op — there's no allocation hot path beyond the closure itself.
+// the operation's final error and elapsed time into the audit log AND
+// advances mutationTick if the operation is a write. Pass a pointer to the
+// function's named-return error so the deferred function observes its
+// post-update value.
 func (d *DB) auditDeferred(op string, ctx context.Context, args map[string]any, errPtr *error) func() {
-	if d.opts.AuditLog == nil {
-		return func() {}
-	}
 	start := time.Now()
 	return func() {
+		// Bump the mutation tick on any successful write/admin op so
+		// subscribers (pkg/graphql) can poll for state changes.
 		var e error
 		if errPtr != nil {
 			e = *errPtr
 		}
-		d.opts.AuditLog.LogErr(op, x.NamespaceFromContext(ctx), args, start, e)
+		if e == nil && isWriteOp(op) {
+			d.mutationTick.Add(1)
+		}
+		if d.opts.AuditLog != nil {
+			d.opts.AuditLog.LogErr(op, x.NamespaceFromContext(ctx), args, start, e)
+		}
 	}
+}
+
+// isWriteOp returns true for operations that change the DB state. Reads
+// (Query, Get) are intentionally not in this list.
+func isWriteOp(op string) bool {
+	switch op {
+	case "Mutate", "Upsert", "Alter",
+		"DropAll", "DropData", "DropPredicate", "DropType",
+		"CreateNamespace", "DropNamespace",
+		"RestoreFrom", "RestoreFromManifest":
+		return true
+	}
+	return false
 }
 
 // Close flushes and closes the database. It is safe to call multiple times.
