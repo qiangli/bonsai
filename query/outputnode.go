@@ -27,7 +27,6 @@ import (
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
 	"github.com/qiangli/dgraph2/algo"
-	gqlSchema "github.com/qiangli/dgraph2/graphql/schema"
 	"github.com/qiangli/dgraph2/protos/pb"
 	"github.com/qiangli/dgraph2/task"
 	"github.com/qiangli/dgraph2/types"
@@ -37,8 +36,11 @@ import (
 )
 
 // ToJson converts the list of subgraph into a JSON response by calling toFastJSON.
-func ToJson(ctx context.Context, l *Latency, sgl []*SubGraph, field gqlSchema.Field) ([]byte,
-	error) {
+//
+// dgraph2 has dropped the upstream GraphQL output path; the upstream signature
+// took a `gqlSchema.Field` parameter that drove GraphQL-formatted output.
+// In dgraph2 the result is always rendered in DQL form.
+func ToJson(ctx context.Context, l *Latency, sgl []*SubGraph) ([]byte, error) {
 	sgr := &SubGraph{}
 	for _, sg := range sgl {
 		if sg.Params.Alias == "var" || sg.Params.Alias == "shortest" {
@@ -49,12 +51,7 @@ func ToJson(ctx context.Context, l *Latency, sgl []*SubGraph, field gqlSchema.Fi
 		}
 		sgr.Children = append(sgr.Children, sg)
 	}
-	data, err := sgr.toFastJSON(ctx, l, field)
-
-	// don't log or wrap GraphQL errors
-	if x.IsGqlErrorList(err) {
-		return data, err
-	}
+	data, err := sgr.toFastJSON(ctx, l)
 	if err != nil {
 		glog.Errorf("while running ToJson: %v\n", err)
 	}
@@ -1177,8 +1174,7 @@ type Extensions struct {
 	Metrics *api.Metrics    `json:"metrics,omitempty"`
 }
 
-func (sg *SubGraph) toFastJSON(ctx context.Context, l *Latency, field gqlSchema.Field) ([]byte,
-	error) {
+func (sg *SubGraph) toFastJSON(_ context.Context, l *Latency) ([]byte, error) {
 	encodingStart := time.Now()
 	defer func() {
 		l.Json = time.Since(encodingStart)
@@ -1191,37 +1187,24 @@ func (sg *SubGraph) toFastJSON(ctx context.Context, l *Latency, field gqlSchema.
 		enc.alloc.Release()
 	}()
 
-	var err error
 	n := enc.newNode(enc.idForAttr("_root_"))
 	for _, sg := range sg.Children {
-		err = processNodeUids(n, enc, sg)
-		if err != nil {
+		if err := processNodeUids(n, enc, sg); err != nil {
 			return nil, err
 		}
 	}
 	enc.fixOrder(n)
 
-	// According to GraphQL spec response should only contain data, errors and extensions as top
-	// level keys. Hence we send server_latency under extensions key.
-	// https://facebook.github.io/graphql/#sec-Response-Format
-
-	// if there is a GraphQL field that means we need to encode the response in GraphQL form,
-	// otherwise encode it in DQL form.
-	if field != nil {
-		// if there were any GraphQL errors, we need to propagate them back to GraphQL layer along
-		// with the data. So, don't return here if we get an error.
-		err = sg.toGraphqlJSON(newGraphQLEncoder(ctx, enc), n, field)
-	} else if err = sg.toDqlJSON(enc, n); err != nil {
+	if err := sg.toDqlJSON(enc, n); err != nil {
 		return nil, err
 	}
 
-	// Return error if encoded buffer size exceeds than a threshold size.
 	if uint64(enc.buf.Len()) > maxEncodedSize {
 		return nil, fmt.Errorf("while writing to buffer. Encoded response size: %d"+
 			" is bigger than threshold: %d", enc.buf.Len(), maxEncodedSize)
 	}
 
-	return enc.buf.Bytes(), err
+	return enc.buf.Bytes(), nil
 }
 
 func (sg *SubGraph) toDqlJSON(enc *encoder, n fastJsonNode) error {
@@ -1230,41 +1213,6 @@ func (sg *SubGraph) toDqlJSON(enc *encoder, n fastJsonNode) error {
 		return nil
 	}
 	return enc.encode(n)
-}
-
-func (sg *SubGraph) toGraphqlJSON(genc *graphQLEncoder, n fastJsonNode, f gqlSchema.Field) error {
-	// GraphQL queries will always have at least one query whose results are visible to users,
-	// implying that the root fastJson node will always have at least one child. So, no need
-	// to check for the case where there are no children for the root fastJson node.
-
-	// if this field has any @custom(http: {...}) children,
-	// then need to resolve them first before encoding the final GraphQL result.
-	genc.processCustomFields(f, n)
-	// now encode the GraphQL results.
-	if !genc.encode(encodeInput{
-		parentField: nil,
-		parentPath:  f.PreAllocatePathSlice(),
-		fj:          n,
-		fjIsRoot:    true,
-		childSelSet: []gqlSchema.Field{f},
-	}) {
-		// if genc.encode() didn't finish successfully here, that means we need to send
-		// data as null in the GraphQL response like this:
-		// 		{
-		// 			"errors": [...],
-		// 			"data": null
-		// 		}
-		// and not just null for a single query in data.
-		// So, reset the buffer contents here, so that GraphQL layer may know that if it gets
-		// error of type x.GqlErrorList along with nil JSON response, then it needs to set whole
-		// data as null.
-		genc.buf.Reset()
-	}
-
-	if len(genc.errs) > 0 {
-		return genc.errs
-	}
-	return nil
 }
 
 func (sg *SubGraph) fieldName() string {

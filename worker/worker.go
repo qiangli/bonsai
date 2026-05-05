@@ -11,14 +11,16 @@
  * `worker` shrinks to a thin façade that:
  *
  *   - holds the Badger handle (`pstore`)
+ *   - holds the per-process UID counter that replaces upstream's xidmap
  *   - exposes the API surface the `posting` and `query` packages still call
  *     (`MutateOverNetwork`, `ProcessTaskOverNetwork`, `SortOverNetwork`,
  *     `AssignUidsOverNetwork`, `GetSchemaOverNetwork`, `GetTypes`,
- *     `Init`, `StartRaftNodes`, `MaxLeaseId`, `LimitDefaults`, ...)
+ *     `Init`, `StartRaftNodes`, `MaxLeaseId`, `LimitDefaults`,
+ *     `ErrNonExistentTabletMessage`)
  *
- * Most "OverNetwork" entry points currently return ErrNotImplemented — they
- * are wired up but not yet executing real queries/mutations. The remaining
- * phases of the rewrite (P1 task.go port, P3 library API) will fill them in.
+ * The "OverNetwork" mutation/query/sort entry points currently return
+ * ErrNotImplemented — they compile but do not yet execute. The dgraph2 demo
+ * library (pkg/dgraph2) drives Badger and posting directly for now.
  */
 package worker
 
@@ -38,7 +40,7 @@ import (
 var pstore *badger.DB
 
 // maxUID tracks the highest UID assigned. Replaces the upstream xidmap +
-// Zero lease. Persisted to a Badger key by AssignUidsOverNetwork.
+// Zero lease.
 var maxUID uint64
 
 // ErrNotImplemented is the placeholder error returned by query/mutation entry
@@ -62,10 +64,10 @@ const LimitDefaults = `mutations=allow; query-edge=1000000; normalize-node=10000
 // Options is the runtime configuration for the worker subsystem. ACL,
 // encryption, vault, and CDC fields are gone — dgraph2 is local-only.
 type Options struct {
-	PostingDir   string
-	WALDir       string
-	MyAddr       string
-	HmacSecret   []byte
+	PostingDir    string
+	WALDir        string
+	MyAddr        string
+	HmacSecret    []byte
 	LudicrousMode bool
 }
 
@@ -114,14 +116,13 @@ func AssignUidsOverNetwork(_ context.Context, num *pb.Num) (*pb.AssignedIds, err
 
 // MutateOverNetwork applies a mutation locally. The full implementation
 // (calling embedded.ApplyMutations against the posting store) is deferred
-// until P1 of the rewrite is complete.
+// until the worker/task.go and worker/mutation.go ports are complete.
 func MutateOverNetwork(_ context.Context, _ *pb.Mutations) (*api.TxnContext, error) {
 	return nil, ErrNotImplemented
 }
 
 // ProcessTaskOverNetwork executes a single-predicate task locally.
-// Deferred — the upstream implementation in `task.go` is ~2,600 lines and
-// still needs to be ported with the cluster forwarding branches stripped.
+// Deferred — the upstream implementation in `task.go` is ~2,600 lines.
 func ProcessTaskOverNetwork(_ context.Context, _ *pb.Query) (*pb.Result, error) {
 	return nil, ErrNotImplemented
 }
