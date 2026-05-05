@@ -7,12 +7,21 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/pprof"
 	"strconv"
 	"testing"
+
+	"github.com/dgraph-io/dgo/v250"
+	"github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
 )
@@ -117,6 +126,113 @@ func mustGet(t *testing.T, url string) *http.Response {
 		t.Fatalf("GET %s: %v", url, err)
 	}
 	return resp
+}
+
+// TestServerOps exercises /metrics, /admin/schema GET, /debug/pprof.
+func TestServerOps(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/alter", handleAlter(db))
+	mux.HandleFunc("/admin/schema", handleAdminSchema(db))
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Add some schema, then GET it back.
+	mustPostJSON(t, srv.URL+"/alter",
+		map[string]string{"schema": "name: string @index(exact) .\nage: int .\n"})
+
+	resp := mustGet(t, srv.URL+"/admin/schema")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !bytes.Contains(body, []byte("name: string @index(exact)")) {
+		t.Errorf("schema GET missing predicate: %s", string(body))
+	}
+	if !bytes.Contains(body, []byte("age: int")) {
+		t.Errorf("schema GET missing age: %s", string(body))
+	}
+
+	// /metrics — should return Prometheus text exposition.
+	resp = mustGet(t, srv.URL+"/metrics")
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !bytes.Contains(body, []byte("# HELP")) {
+		t.Errorf("/metrics not Prometheus format: %s", string(body[:min(200, len(body))]))
+	}
+
+	// /debug/pprof — index page.
+	resp = mustGet(t, srv.URL+"/debug/pprof/")
+	if resp.StatusCode != 200 {
+		t.Errorf("pprof index status: %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// TestServerGRPC exercises the gRPC api.DgraphServer adapter via the dgo
+// client. Proves that a real Dgraph client can talk to dgraph2-server
+// unchanged.
+func TestServerGRPC(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Bind a random port and start the gRPC server in-process.
+	gln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	gs := grpc.NewServer()
+	api.RegisterDgraphServer(gs, newGRPCAdapter(db))
+	go func() { _ = gs.Serve(gln) }()
+	defer gs.GracefulStop()
+
+	// dgo client.
+	conn, err := grpc.NewClient(gln.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	dg := dgo.NewDgraphClient(api.NewDgraphClient(conn))
+
+	ctx := context.Background()
+	if err := dg.Alter(ctx, &api.Operation{Schema: "name: string @index(exact) .\n"}); err != nil {
+		t.Fatalf("Alter via gRPC: %v", err)
+	}
+
+	txn := dg.NewTxn()
+	resp, err := txn.Mutate(ctx, &api.Mutation{
+		SetNquads: []byte(`_:dave <name> "Dave" .`),
+	})
+	if err != nil {
+		t.Fatalf("Mutate via gRPC: %v", err)
+	}
+	if _, ok := resp.Uids["dave"]; !ok {
+		t.Errorf("no uid for dave: %v", resp.Uids)
+	}
+	if err := txn.Commit(ctx); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	q, err := dg.NewReadOnlyTxn().Query(ctx, `{ q(func: eq(name, "Dave")) { name } }`)
+	if err != nil {
+		t.Fatalf("Query via gRPC: %v", err)
+	}
+	if !bytes.Contains(q.Json, []byte("Dave")) {
+		t.Errorf("query missed Dave: %s", string(q.Json))
+	}
 }
 
 func mustPostBytes(t *testing.T, url, contentType string, body []byte) *http.Response {

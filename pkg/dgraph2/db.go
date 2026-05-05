@@ -413,6 +413,83 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 
 func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
 
+// SchemaText returns the active schema in DQL form, suitable for handing
+// back to Alter on a fresh DB. Reserved (dgraph.* / 0-dgraph.*) predicates
+// are filtered out.
+func (d *DB) SchemaText(ctx context.Context) (string, error) {
+	var b strings.Builder
+	for _, attr := range schema.State().Predicates() {
+		bare := attr
+		if i := strings.Index(attr, x.NsSeparator); i > 0 {
+			bare = attr[i+1:]
+		}
+		if strings.HasPrefix(bare, "dgraph.") {
+			continue
+		}
+		su, ok := schema.State().Get(ctx, attr)
+		if !ok {
+			continue
+		}
+		b.WriteString(formatSchemaUpdate(bare, &su))
+		b.WriteString("\n")
+	}
+	for _, t := range schema.State().Types() {
+		if strings.Contains(t, "dgraph.") {
+			continue
+		}
+		b.WriteString("type ")
+		b.WriteString(t)
+		b.WriteString(" {\n")
+		tu, ok := schema.State().GetType(t)
+		if ok {
+			for _, f := range tu.Fields {
+				bare := f.Predicate
+				if i := strings.Index(bare, x.NsSeparator); i > 0 {
+					bare = bare[i+1:]
+				}
+				b.WriteString("  ")
+				b.WriteString(bare)
+				b.WriteString("\n")
+			}
+		}
+		b.WriteString("}\n")
+	}
+	return b.String(), nil
+}
+
+func formatSchemaUpdate(name string, su *pb.SchemaUpdate) string {
+	var b strings.Builder
+	b.WriteString(name)
+	b.WriteString(": ")
+	tn := types.TypeID(su.ValueType).Name()
+	if su.List {
+		b.WriteString("[")
+		b.WriteString(tn)
+		b.WriteString("]")
+	} else {
+		b.WriteString(tn)
+	}
+	if len(su.Tokenizer) > 0 {
+		b.WriteString(" @index(")
+		b.WriteString(strings.Join(su.Tokenizer, ", "))
+		b.WriteString(")")
+	}
+	if su.Directive == pb.SchemaUpdate_REVERSE {
+		b.WriteString(" @reverse")
+	}
+	if su.Count {
+		b.WriteString(" @count")
+	}
+	if su.Upsert {
+		b.WriteString(" @upsert")
+	}
+	if su.Lang {
+		b.WriteString(" @lang")
+	}
+	b.WriteString(" .")
+	return b.String()
+}
+
 // AssignUid hands out a contiguous block of fresh UIDs and persists the new
 // high-water mark to Badger so the counter survives restart.
 func (d *DB) AssignUid(_ context.Context, count uint64) (start, end uint64, err error) {

@@ -20,13 +20,18 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 
+	"github.com/dgraph-io/dgo/v250/protos/api"
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"google.golang.org/grpc"
 
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
 )
@@ -34,6 +39,7 @@ import (
 func main() {
 	dir := flag.String("dir", "./dgraph2-data", "data directory (Badger lives at <dir>/p)")
 	addr := flag.String("http", ":8080", "HTTP listen address")
+	grpcAddr := flag.String("grpc", ":9080", "gRPC listen address")
 	flag.Parse()
 
 	db, err := dgraph2.Open(dgraph2.Options{Dir: *dir})
@@ -56,8 +62,24 @@ func main() {
 	mux.HandleFunc("/assign", handleAssign(db))
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 	mux.HandleFunc("/admin/restore", handleRestore(db))
+	mux.HandleFunc("/admin/schema", handleAdminSchema(db))
+	mux.Handle("/metrics", promhttp.Handler())
+	// /debug/pprof/* — registered as side effect of importing net/http/pprof.
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	srv := &http.Server{Addr: *addr, Handler: mux}
+
+	// gRPC server.
+	gs := grpc.NewServer()
+	api.RegisterDgraphServer(gs, newGRPCAdapter(db))
+	gln, err := net.Listen("tcp", *grpcAddr)
+	if err != nil {
+		log.Fatalf("grpc listen %s: %v", *grpcAddr, err)
+	}
 
 	// Graceful shutdown on SIGINT/SIGTERM so the Badger Close runs.
 	stop := make(chan os.Signal, 1)
@@ -65,10 +87,18 @@ func main() {
 	go func() {
 		<-stop
 		log.Println("shutting down ...")
+		gs.GracefulStop()
 		_ = srv.Shutdown(context.Background())
 	}()
 
-	log.Printf("dgraph2-server listening on %s, data at %s", *addr, *dir)
+	go func() {
+		log.Printf("dgraph2-server gRPC listening on %s", *grpcAddr)
+		if err := gs.Serve(gln); err != nil {
+			log.Printf("gRPC Serve: %v", err)
+		}
+	}()
+
+	log.Printf("dgraph2-server HTTP listening on %s, data at %s", *addr, *dir)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("ListenAndServe: %v", err)
 	}
@@ -230,6 +260,27 @@ func handleBackup(db *dgraph2.DB) http.HandlerFunc {
 			return
 		}
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	}
+}
+
+// handleAdminSchema GETs dump the active schema in DQL form. POSTs reuse the
+// existing Alter handler.
+func handleAdminSchema(db *dgraph2.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			out, err := db.SchemaText(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = w.Write([]byte(out))
+		case http.MethodPost:
+			handleAlter(db).ServeHTTP(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 
