@@ -1,0 +1,33 @@
+#
+priorart
+reference
+
+# Build artifacts
+/build
+/installs
+/coverage.out
+/dgraph2-server
+/dgraph
+
+# IDE
+.idea
+.vscode
+*.iml
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+
+# OS
+.DS_Store
+
+# Misc
+vendor
+.minio.sys

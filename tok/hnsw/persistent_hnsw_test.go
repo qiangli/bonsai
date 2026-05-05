@@ -1,0 +1,841 @@
+/*
+ * SPDX-FileCopyrightText: © 2017-2025 Istari Digital, Inc.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+package hnsw
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+
+	c "github.com/qiangli/dgraph2/tok/constraints"
+	"github.com/qiangli/dgraph2/tok/index"
+	opt "github.com/qiangli/dgraph2/tok/options"
+	"golang.org/x/exp/slices"
+)
+
+type createpersistentHNSWTest[T c.Float] struct {
+	maxLevels         int
+	efSearch          int
+	efConstruction    int
+	pred              string
+	indexType         string
+	expectedIndexType string
+	floatBits         int
+}
+
+var createpersistentHNSWTests = []createpersistentHNSWTest[float64]{
+	{
+		maxLevels:         1,
+		efSearch:          1,
+		efConstruction:    1,
+		pred:              "a",
+		indexType:         "b",
+		expectedIndexType: Euclidean,
+		floatBits:         64,
+	},
+	{
+		maxLevels:         1,
+		efSearch:          1,
+		efConstruction:    1,
+		pred:              "a",
+		indexType:         Euclidean,
+		expectedIndexType: Euclidean,
+		floatBits:         64,
+	},
+	{
+		maxLevels:         1,
+		efSearch:          1,
+		efConstruction:    1,
+		pred:              "a",
+		indexType:         Cosine,
+		expectedIndexType: Cosine,
+		floatBits:         64,
+	},
+	{
+		maxLevels:         1,
+		efSearch:          1,
+		efConstruction:    1,
+		pred:              "a",
+		indexType:         DotProd,
+		expectedIndexType: DotProd,
+		floatBits:         64,
+	},
+}
+
+func optionsFromCreateTestCase[T c.Float](tc createpersistentHNSWTest[T]) opt.Options {
+	retVal := opt.NewOptions()
+	retVal.SetOpt(MaxLevelsOpt, tc.maxLevels)
+	retVal.SetOpt(EfSearchOpt, tc.efSearch)
+	retVal.SetOpt(EfConstructionOpt, tc.efConstruction)
+	retVal.SetOpt(MetricOpt, GetSimType[T](tc.indexType, tc.floatBits))
+	return retVal
+}
+
+func TestRaceCreateOrReplace(t *testing.T) {
+	f := CreateFactory[float64](64)
+	test := createpersistentHNSWTests[0]
+	opts := optionsFromCreateTestCase(test)
+
+	var wg sync.WaitGroup
+	run := func() {
+		for i := range 10 {
+			vIndex, err := f.CreateOrReplace(test.pred, opts, 32)
+			if err != nil {
+				t.Errorf("Error creating index: %s for test case %d (%+v)",
+					err, i, test)
+			}
+			if vIndex == nil {
+				t.Errorf("TestCreatepersistentHNSW test case %d (%+v) generated nil index",
+					i, test)
+			}
+		}
+		wg.Done()
+	}
+
+	for range 5 {
+		wg.Add(1)
+		go run()
+	}
+
+	wg.Wait()
+}
+
+func TestCreatepersistentHNSW(t *testing.T) {
+	f := CreateFactory[float64](32)
+	for i, test := range createpersistentHNSWTests {
+		opts := optionsFromCreateTestCase(test)
+		vIndex, err := f.CreateOrReplace(test.pred, opts, 32)
+		if err != nil {
+			t.Errorf("Error creating index: %s for test case %d (%+v)",
+				err, i, test)
+			return
+		}
+		if vIndex == nil {
+			t.Errorf("TestCreatepersistentHNSW test case %d (%+v) generated nil index",
+				i, test)
+			return
+		}
+		flatPh := vIndex.(*persistentHNSW[float64])
+		if flatPh.simType.indexType != test.expectedIndexType {
+			t.Errorf("output %q not equal to expected %q", flatPh.simType.indexType, test.expectedIndexType)
+			return
+		}
+	}
+}
+
+type flatInMemListAddMutationTest struct {
+	key         string
+	startTs     uint64
+	finishTs    uint64
+	t           *index.KeyValue
+	expectedErr error
+}
+
+var flatInMemListAddMutationTests = []flatInMemListAddMutationTest{
+	{key: "a", startTs: 0, finishTs: 5, t: &index.KeyValue{Value: []byte("abc")}, expectedErr: nil},
+	{key: "b", startTs: 1, finishTs: 2, t: &index.KeyValue{Value: []byte("123")}, expectedErr: nil},
+	{key: "c", startTs: 0, finishTs: 99, t: &index.KeyValue{Value: []byte("xyz")}, expectedErr: nil},
+}
+
+// TODO: It seriously seems wrong to have a transactional concept so tightly coupled with
+//
+//	Dgraph product here! We should expect that we are using this module for completely
+//	independent use, possibly having nothing to do with Dgraph.
+func flatInMemListWriteMutation(test flatInMemListAddMutationTest, t *testing.T) {
+	l := newInMemList(test.key, test.startTs, test.finishTs)
+	err := l.AddMutation(context.TODO(), nil, test.t)
+	if err != nil {
+		if err.Error() != test.expectedErr.Error() {
+			t.Errorf("Output %q not equal to expected %q", err.Error(), test.expectedErr.Error())
+		}
+	} else {
+		if err != test.expectedErr {
+			t.Errorf("Output %q not equal to expected %q", err, test.expectedErr)
+		}
+	}
+	// should not modify db [test.startTs, test.finishTs)
+	if string(tsDbs[test.finishTs-1].inMemTestDb[test.key]) != string(tsDbs[test.startTs].inMemTestDb[test.key]) {
+		t.Errorf(
+			"Database at time %d not equal to expected database at time %d. Expected: %q, Got: %q",
+			test.finishTs-1, test.startTs,
+			tsDbs[test.startTs].inMemTestDb[test.key],
+			tsDbs[test.finishTs-1].inMemTestDb[test.key])
+	}
+	if string(tsDbs[test.finishTs].inMemTestDb[test.key][:]) != string(test.t.Value[:]) {
+		t.Errorf("The database at time %d for key %q gave value  of %q instead of %q", test.finishTs,
+			test.key, string(tsDbs[test.finishTs].inMemTestDb[test.key][:]), string(test.t.Value[:]))
+	}
+	if string(tsDbs[test.finishTs].inMemTestDb[test.key][:]) !=
+		string(tsDbs[99].inMemTestDb[test.key][:]) {
+		t.Errorf("The database at time %d for key %q gave value  of %q instead of %q", test.finishTs,
+			test.key, string(tsDbs[99].inMemTestDb[test.key][:]),
+			string(tsDbs[test.finishTs].inMemTestDb[test.key][:]))
+	}
+}
+
+func TestFlatInMemListAddMutation(t *testing.T) {
+	emptyTsDbs()
+	for _, test := range flatInMemListAddMutationTests {
+		flatInMemListWriteMutation(test, t)
+	}
+}
+
+var flatInMemListAddMutationOverwriteTests = []flatInMemListAddMutationTest{
+	{key: "a", startTs: 0, finishTs: 5, t: &index.KeyValue{Value: []byte("abc")}, expectedErr: nil},
+	{key: "a", startTs: 0, finishTs: 5, t: &index.KeyValue{Value: []byte("123")}, expectedErr: nil},
+	{key: "a", startTs: 0, finishTs: 5, t: &index.KeyValue{Value: []byte("xyz")}, expectedErr: nil},
+}
+
+func TestFlatInMemListAddOverwriteMutation(t *testing.T) {
+	emptyTsDbs()
+	for _, test := range flatInMemListAddMutationOverwriteTests {
+		flatInMemListWriteMutation(test, t)
+	}
+}
+
+type flatInMemListAddMutationTestBranchDependent struct {
+	key           string
+	startTs       uint64
+	finishTs      uint64
+	t             *index.KeyValue
+	expectedErr   error
+	currIteration int
+}
+
+var flatInMemListAddMultipleWritesMutationTests = []flatInMemListAddMutationTestBranchDependent{
+	{key: "a", startTs: 0, finishTs: 2, t: &index.KeyValue{Value: []byte("abc")}, expectedErr: nil, currIteration: 0},
+	{key: "a", startTs: 1, finishTs: 3, t: &index.KeyValue{Value: []byte("123")}, expectedErr: nil, currIteration: 1},
+	{key: "a", startTs: 2, finishTs: 4, t: &index.KeyValue{Value: []byte("xyz")}, expectedErr: nil, currIteration: 2},
+}
+
+func TestFlatInMemListAddMultipleWritesMutation(t *testing.T) {
+	emptyTsDbs()
+	for _, test := range flatInMemListAddMultipleWritesMutationTests {
+		l := newInMemList(test.key, test.startTs, test.finishTs)
+		err := l.AddMutation(context.TODO(), nil, test.t)
+		if err != nil {
+			if err.Error() != test.expectedErr.Error() {
+				t.Errorf("Output %q not equal to expected %q", err.Error(), test.expectedErr.Error())
+			}
+		} else {
+			if err != test.expectedErr {
+				t.Errorf("Output %q not equal to expected %q", err, test.expectedErr)
+			}
+		}
+		if test.currIteration == 0 {
+			conv := flatInMemListAddMutationTest{test.key, test.startTs, test.finishTs, test.t, test.expectedErr}
+			flatInMemListWriteMutation(conv, t)
+		} else {
+			if string(tsDbs[test.finishTs-1].inMemTestDb[test.key][:]) !=
+				string(flatInMemListAddMultipleWritesMutationTests[test.currIteration-1].t.Value[:]) {
+				t.Errorf("The database at time %d for key %q gave value  of %q instead of %q", test.finishTs,
+					test.key, string(tsDbs[test.finishTs].inMemTestDb[test.key][:]), string(test.t.Value[:]))
+			}
+			if string(tsDbs[test.finishTs].inMemTestDb[test.key][:]) != string(test.t.Value[:]) {
+				t.Errorf("The database at time %d for key %q gave value  of %q instead of %q", test.finishTs,
+					test.key, string(tsDbs[test.finishTs].inMemTestDb[test.key][:]), string(test.t.Value[:]))
+			}
+		}
+	}
+}
+
+type insertToPersistentFlatStorageTest struct {
+	tc                *TxnCache
+	inUuid            uint64
+	inVec             []float64
+	expectedErr       error
+	expectedEdgesList []string
+	minExpectedEdge   string
+}
+
+var flatPhs = []*persistentHNSW[float64]{
+	{
+		maxLevels:      5,
+		efConstruction: 16,
+		efSearch:       12,
+		pred:           "0-a",
+		vecEntryKey:    ConcatStrings("0-a", VecEntry),
+		vecKey:         ConcatStrings("0-a", VecKeyword),
+		vecDead:        ConcatStrings("0-a", VecDead),
+		floatBits:      64,
+		simType:        GetSimType[float64](Euclidean, 64),
+		nodeAllEdges:   make(map[uint64][][]uint64),
+	},
+	{
+		maxLevels:      5,
+		efConstruction: 16,
+		efSearch:       12,
+		pred:           "0-a",
+		vecEntryKey:    ConcatStrings("0-a", VecEntry),
+		vecKey:         ConcatStrings("0-a", VecKeyword),
+		vecDead:        ConcatStrings("0-a", VecDead),
+		floatBits:      64,
+		simType:        GetSimType[float64](Cosine, 64),
+		nodeAllEdges:   make(map[uint64][][]uint64),
+	},
+	{
+		maxLevels:      5,
+		efConstruction: 16,
+		efSearch:       12,
+		pred:           "0-a",
+		vecEntryKey:    ConcatStrings("0-a", VecEntry),
+		vecKey:         ConcatStrings("0-a", VecKeyword),
+		vecDead:        ConcatStrings("0-a", VecDead),
+		floatBits:      64,
+		simType:        GetSimType[float64](DotProd, 64),
+		nodeAllEdges:   make(map[uint64][][]uint64),
+	},
+}
+
+var flatEntryInsertToPersistentFlatStorageTests = []insertToPersistentFlatStorageTest{
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 12, commitTs: 40}, 12),
+		inUuid:            uint64(123),
+		inVec:             []float64{0.824, 0.319, 0.111},
+		expectedErr:       nil,
+		expectedEdgesList: []string{"0-a__vector__123", "0-a__vector_entry_1"},
+		minExpectedEdge:   "",
+	},
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 11, commitTs: 37}, 11),
+		inUuid:            uint64(1),
+		inVec:             []float64{0.3, 0.5, 0.7},
+		expectedErr:       nil,
+		expectedEdgesList: []string{"0-a__vector__1", "0-a__vector_entry_1"},
+		minExpectedEdge:   "",
+	},
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 0, commitTs: 1}, 0),
+		inUuid:            uint64(5),
+		inVec:             []float64{0.1, 0.1, 0.1},
+		expectedErr:       nil,
+		expectedEdgesList: []string{"0-a__vector__5", "0-a__vector_entry_1"},
+		minExpectedEdge:   "",
+	},
+}
+
+func TestFlatEntryInsertToPersistentFlatStorage(t *testing.T) {
+	emptyTsDbs()
+	flatPh := flatPhs[0]
+	for _, test := range flatEntryInsertToPersistentFlatStorageTests {
+		emptyTsDbs()
+		key := DataKey(flatPh.pred, test.inUuid)
+		for i := range tsDbs {
+			tsDbs[i].inMemTestDb[string(key[:])] = floatArrayAsBytes(test.inVec)
+		}
+		edges, err := flatPh.Insert(context.TODO(), test.tc, test.inUuid, test.inVec)
+		if err != nil {
+			if err.Error() != test.expectedErr.Error() {
+				t.Errorf("Output %q not equal to expected %q", err.Error(), test.expectedErr.Error())
+			}
+		} else {
+			if err != test.expectedErr {
+				t.Errorf("Output %q not equal to expected %q", err, test.expectedErr)
+			}
+		}
+		var float1, float2 = []float64{}, []float64{}
+		skey := string(key[:])
+		index.BytesAsFloatArray(tsDbs[0].inMemTestDb[skey], &float1, 64)
+		index.BytesAsFloatArray(tsDbs[99].inMemTestDb[skey], &float2, 64)
+		if !equalFloat64Slice(float1, float2) {
+			t.Errorf("Vector value for predicate %q at beginning and end of database were "+
+				"not equivalent. Start Value: %v\n, End Value: %v\n %v\n %v", flatPh.pred, tsDbs[0].inMemTestDb[skey],
+				tsDbs[99].inMemTestDb[skey], float1, float2)
+		}
+		edgesNameList := []string{}
+		for _, edge := range edges {
+			edgeName := edge.Attr + "_" + fmt.Sprint(edge.Entity)
+			edgesNameList = append(edgesNameList, edgeName)
+		}
+		if !equalStringSlice(edgesNameList, test.expectedEdgesList) {
+			t.Errorf("Edges created during insert is incorrect. Expected: %v, Got: %v", test.expectedEdgesList, edgesNameList)
+		}
+		entryKey := DataKey(ConcatStrings(flatPh.pred, VecEntry), 1)
+		entryVal := BytesToUint64(tsDbs[99].inMemTestDb[string(entryKey[:])])
+		if entryVal != test.inUuid {
+			t.Errorf("entry value stored is incorrect. Expected: %d, Got: %d", test.inUuid, entryVal)
+		}
+	}
+}
+
+var flatEntryInsert = insertToPersistentFlatStorageTest{
+	tc:          NewTxnCache(&inMemTxn{startTs: 0, commitTs: 1}, 0),
+	inUuid:      uint64(5),
+	inVec:       []float64{0.1, 0.1, 0.1},
+	expectedErr: nil,
+	expectedEdgesList: []string{
+		"0-a__vector__5",
+		"0-a__vector__5",
+		"0-a__vector__5",
+		"0-a__vector__5",
+		"0-a__vector__5",
+		"0-a__vector_entry_1",
+	},
+	minExpectedEdge: "",
+}
+
+var nonflatEntryInsertToPersistentFlatStorageTests = []insertToPersistentFlatStorageTest{
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 12, commitTs: 40}, 12),
+		inUuid:            uint64(123),
+		inVec:             []float64{0.824, 0.319, 0.111},
+		expectedErr:       nil,
+		expectedEdgesList: []string{},
+		minExpectedEdge:   "0-a__vector__123",
+	},
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 11, commitTs: 37}, 11),
+		inUuid:            uint64(1),
+		inVec:             []float64{0.3, 0.5, 0.7},
+		expectedErr:       nil,
+		expectedEdgesList: []string{},
+		minExpectedEdge:   "0-a__vector__1",
+	},
+}
+
+func TestNonflatEntryInsertToPersistentFlatStorage(t *testing.T) {
+	emptyTsDbs()
+	flatPh := flatPhs[0]
+	key := DataKey(flatPh.pred, flatEntryInsert.inUuid)
+	for i := range tsDbs {
+		tsDbs[i].inMemTestDb[string(key[:])] = floatArrayAsBytes(flatEntryInsert.inVec)
+	}
+	_, err := flatPh.Insert(context.TODO(),
+		flatEntryInsert.tc,
+		flatEntryInsert.inUuid,
+		flatEntryInsert.inVec)
+	if err != nil {
+		t.Errorf("Encountered error on initial insert: %s", err)
+		return
+	}
+	// testKey := DataKey(BuildDataKeyPred(flatPh.pred, VecKeyword, fmt.Sprint(0)), flatEntryInsert.inUuid)
+	// fmt.Print(tsDbs[1].inMemTestDb[string(testKey[:])])
+	for _, test := range nonflatEntryInsertToPersistentFlatStorageTests {
+		entryKey := DataKey(ConcatStrings(flatPh.pred, VecEntry), 1)
+		entryVal := BytesToUint64(tsDbs[99].inMemTestDb[string(entryKey[:])])
+		if entryVal != 5 {
+			t.Errorf("entry value stored is incorrect. Expected: %d, Got: %d", 5, entryVal)
+		}
+		for i := range tsDbs {
+			key := DataKey(flatPh.pred, test.inUuid)
+			tsDbs[i].inMemTestDb[string(key[:])] = floatArrayAsBytes(test.inVec)
+		}
+		edges, err := flatPh.Insert(context.TODO(), test.tc, test.inUuid, test.inVec)
+		if err != nil && test.expectedErr != nil {
+			if err.Error() != test.expectedErr.Error() {
+				t.Errorf("Output %q not equal to expected %q", err.Error(), test.expectedErr.Error())
+			}
+		} else {
+			if err != test.expectedErr {
+				t.Errorf("Output %q not equal to expected %q", err, test.expectedErr)
+			}
+		}
+		var float1, float2 = []float64{}, []float64{}
+		index.BytesAsFloatArray(tsDbs[0].inMemTestDb[string(key[:])], &float1, 64)
+		index.BytesAsFloatArray(tsDbs[99].inMemTestDb[string(key[:])], &float2, 64)
+		if !equalFloat64Slice(float1, float2) {
+			t.Errorf("Vector value for predicate %q at beginning and end of database were "+
+				"not equivalent. Start Value: %v, End Value: %v", flatPh.pred, tsDbs[0].inMemTestDb[flatPh.pred],
+				tsDbs[99].inMemTestDb[flatPh.pred])
+		}
+		edgesNameList := []string{}
+		for _, edge := range edges {
+			edgeName := edge.Attr + "_" + fmt.Sprint(edge.Entity)
+			edgesNameList = append(edgesNameList, edgeName)
+		}
+		if !slices.Contains(edgesNameList, test.minExpectedEdge) {
+			t.Errorf("Expected at least %q in list of edges %v", test.minExpectedEdge, edgesNameList)
+		}
+	}
+}
+
+type searchPersistentFlatStorageTest struct {
+	qc          *QueryCache
+	query       []float64
+	maxResults  int
+	expectedErr error
+	expectedNns []uint64
+}
+
+var searchPersistentFlatStorageTests = []searchPersistentFlatStorageTest{
+	{
+		qc:          NewQueryCache(&inMemLocalCache{readTs: 45}, 45),
+		query:       []float64{0.3, 0.5, 0.7},
+		maxResults:  1,
+		expectedErr: nil,
+		expectedNns: []uint64{1},
+	},
+	{
+		qc:          NewQueryCache(&inMemLocalCache{readTs: 93}, 93),
+		query:       []float64{0.824, 0.319, 0.111},
+		maxResults:  1,
+		expectedErr: nil,
+		expectedNns: []uint64{123},
+	},
+}
+
+var flatPopulateBasicInsertsForSearch = []insertToPersistentFlatStorageTest{
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 0, commitTs: 1}, 0),
+		inUuid:            uint64(5),
+		inVec:             []float64{0.1, 0.1, 0.1},
+		expectedErr:       nil,
+		expectedEdgesList: nil,
+		minExpectedEdge:   "",
+	},
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 11, commitTs: 15}, 11),
+		inUuid:            uint64(123),
+		inVec:             []float64{0.824, 0.319, 0.111},
+		expectedErr:       nil,
+		expectedEdgesList: nil,
+		minExpectedEdge:   "",
+	},
+	{
+		tc:                NewTxnCache(&inMemTxn{startTs: 20, commitTs: 37}, 20),
+		inUuid:            uint64(1),
+		inVec:             []float64{0.3, 0.5, 0.7},
+		expectedErr:       nil,
+		expectedEdgesList: nil,
+		minExpectedEdge:   "",
+	},
+}
+
+func flatPopulateInserts(insertArr []insertToPersistentFlatStorageTest, flatPh *persistentHNSW[float64]) error {
+	emptyTsDbs()
+	for _, in := range insertArr {
+		for i := range tsDbs {
+			key := DataKey(flatPh.pred, in.inUuid)
+			tsDbs[i].inMemTestDb[string(key[:])] = floatArrayAsBytes(in.inVec)
+		}
+		_, err := flatPh.Insert(context.TODO(), in.tc, in.inUuid, in.inVec)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func RunFlatSearchTests(t *testing.T, test searchPersistentFlatStorageTest, flatPh *persistentHNSW[float64]) {
+	nns, err := flatPh.Search(context.TODO(), test.qc, test.query, test.maxResults, index.AcceptAll[float64])
+	if err != nil && test.expectedErr != nil {
+		if err.Error() != test.expectedErr.Error() {
+			t.Errorf("Output %q not equal to expected %q", err.Error(), test.expectedErr.Error())
+		}
+	} else {
+		if err != test.expectedErr {
+			t.Errorf("Output %q not equal to expected %q", err, test.expectedErr)
+		}
+	}
+	if !equalUint64Slice(nns, test.expectedNns) {
+		t.Errorf("Nearest neighbors expected value: %v, Got: %v", test.expectedNns, nns)
+	}
+}
+
+func TestBasicSearchPersistentFlatStorage(t *testing.T) {
+	for _, flatPh := range flatPhs {
+		emptyTsDbs()
+		err := flatPopulateInserts(flatPopulateBasicInsertsForSearch, flatPh)
+		if err != nil {
+			t.Errorf("Error populating inserts: %s", err)
+			return
+		}
+		for _, test := range searchPersistentFlatStorageTests {
+			RunFlatSearchTests(t, test, flatPh)
+		}
+	}
+}
+
+// TestCandidateHeapMinHeap verifies that the min-heap (for distance metrics like euclidean)
+// pops elements in ascending order (smallest first).
+func TestCandidateHeapMinHeap(t *testing.T) {
+	elements := []persistentHeapElement[float64]{
+		{value: 0.5, index: 1},
+		{value: 0.1, index: 2},
+		{value: 0.9, index: 3},
+		{value: 0.3, index: 4},
+	}
+
+	// isSimilarityMetric=false means min-heap (for distance metrics)
+	heap := buildCandidateHeap(elements, false)
+
+	// Should pop in ascending order: 0.1, 0.3, 0.5, 0.9
+	expectedOrder := []float64{0.1, 0.3, 0.5, 0.9}
+	for i, expected := range expectedOrder {
+		if heap.Len() == 0 {
+			t.Fatalf("Heap empty before popping element %d", i)
+		}
+		elem := heap.Pop()
+		if elem.value != expected {
+			t.Errorf("Min-heap pop %d: expected value %v, got %v", i, expected, elem.value)
+		}
+	}
+
+	if heap.Len() != 0 {
+		t.Errorf("Expected heap to be empty, but has %d elements", heap.Len())
+	}
+}
+
+// TestCandidateHeapMaxHeap verifies that the max-heap (for similarity metrics like cosine)
+// pops elements in descending order (largest first).
+func TestCandidateHeapMaxHeap(t *testing.T) {
+	elements := []persistentHeapElement[float64]{
+		{value: 0.5, index: 1},
+		{value: 0.1, index: 2},
+		{value: 0.9, index: 3},
+		{value: 0.3, index: 4},
+	}
+
+	// isSimilarityMetric=true means max-heap (for similarity metrics)
+	heap := buildCandidateHeap(elements, true)
+
+	// Should pop in descending order: 0.9, 0.5, 0.3, 0.1
+	expectedOrder := []float64{0.9, 0.5, 0.3, 0.1}
+	for i, expected := range expectedOrder {
+		if heap.Len() == 0 {
+			t.Fatalf("Heap empty before popping element %d", i)
+		}
+		elem := heap.Pop()
+		if elem.value != expected {
+			t.Errorf("Max-heap pop %d: expected value %v, got %v", i, expected, elem.value)
+		}
+	}
+
+	if heap.Len() != 0 {
+		t.Errorf("Expected heap to be empty, but has %d elements", heap.Len())
+	}
+}
+
+// TestCandidateHeapPushPop verifies that Push and Pop work correctly for both heap types.
+func TestCandidateHeapPushPop(t *testing.T) {
+	t.Run("MinHeap", func(t *testing.T) {
+		heap := buildCandidateHeap([]persistentHeapElement[float64]{}, false)
+
+		heap.Push(persistentHeapElement[float64]{value: 0.5, index: 1})
+		heap.Push(persistentHeapElement[float64]{value: 0.2, index: 2})
+		heap.Push(persistentHeapElement[float64]{value: 0.8, index: 3})
+
+		// Min-heap should pop smallest first
+		elem := heap.Pop()
+		if elem.value != 0.2 {
+			t.Errorf("Expected 0.2, got %v", elem.value)
+		}
+		elem = heap.Pop()
+		if elem.value != 0.5 {
+			t.Errorf("Expected 0.5, got %v", elem.value)
+		}
+		elem = heap.Pop()
+		if elem.value != 0.8 {
+			t.Errorf("Expected 0.8, got %v", elem.value)
+		}
+	})
+
+	t.Run("MaxHeap", func(t *testing.T) {
+		heap := buildCandidateHeap([]persistentHeapElement[float64]{}, true)
+
+		heap.Push(persistentHeapElement[float64]{value: 0.5, index: 1})
+		heap.Push(persistentHeapElement[float64]{value: 0.2, index: 2})
+		heap.Push(persistentHeapElement[float64]{value: 0.8, index: 3})
+
+		// Max-heap should pop largest first
+		elem := heap.Pop()
+		if elem.value != 0.8 {
+			t.Errorf("Expected 0.8, got %v", elem.value)
+		}
+		elem = heap.Pop()
+		if elem.value != 0.5 {
+			t.Errorf("Expected 0.5, got %v", elem.value)
+		}
+		elem = heap.Pop()
+		if elem.value != 0.2 {
+			t.Errorf("Expected 0.2, got %v", elem.value)
+		}
+	})
+}
+
+// TestSimilarityTypeIsSimilarityMetric verifies that GetSimType sets isSimilarityMetric correctly.
+func TestSimilarityTypeIsSimilarityMetric(t *testing.T) {
+	tests := []struct {
+		indexType         string
+		expectedIsSimilar bool
+	}{
+		{Euclidean, false},
+		{Cosine, true},
+		{DotProd, true},
+		{"unknown", false}, // defaults to euclidean
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.indexType, func(t *testing.T) {
+			simType := GetSimType[float64](tc.indexType, 64)
+			if simType.isSimilarityMetric != tc.expectedIsSimilar {
+				t.Errorf("GetSimType(%q).isSimilarityMetric = %v, expected %v",
+					tc.indexType, simType.isSimilarityMetric, tc.expectedIsSimilar)
+			}
+		})
+	}
+}
+
+// TestEdgePruningKeepsBestNeighbors verifies that when edges are pruned during
+// graph construction, the BEST neighbors are kept (not the worst).
+// This test would have caught the bug where the HeapDataHolder comparison was
+// hardcoded to ">", which kept lowest similarities for cosine/dot-product.
+func TestEdgePruningKeepsBestNeighbors(t *testing.T) {
+	testCases := []struct {
+		name       string
+		metricType string
+		// For each metric, define scores and which should be kept
+		// Euclidean: lower is better, so keep [0.1, 0.2] from [0.1, 0.2, 0.8, 0.9]
+		// Cosine: higher is better, so keep [0.8, 0.9] from [0.1, 0.2, 0.8, 0.9]
+		scores       []float64
+		keepCount    int
+		expectedBest []float64 // the scores that should be kept
+	}{
+		{
+			name:         "Euclidean_KeepsLowest",
+			metricType:   Euclidean,
+			scores:       []float64{0.5, 0.1, 0.9, 0.2},
+			keepCount:    2,
+			expectedBest: []float64{0.1, 0.2}, // lowest distances
+		},
+		{
+			name:         "Cosine_KeepsHighest",
+			metricType:   Cosine,
+			scores:       []float64{0.5, 0.1, 0.9, 0.2},
+			keepCount:    2,
+			expectedBest: []float64{0.9, 0.5}, // highest similarities
+		},
+		{
+			name:         "DotProd_KeepsHighest",
+			metricType:   DotProd,
+			scores:       []float64{0.5, 0.1, 0.9, 0.2},
+			keepCount:    2,
+			expectedBest: []float64{0.9, 0.5}, // highest similarities
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			simType := GetSimType[float64](tc.metricType, 64)
+
+			// Create UIDs for each score
+			uids := make([]uint64, len(tc.scores))
+			scoreMap := make(map[uint64]float64)
+			for i, score := range tc.scores {
+				uids[i] = uint64(i + 1)
+				scoreMap[uids[i]] = score
+			}
+
+			scoreFn := func(uid uint64) float64 { return scoreMap[uid] }
+			keptUids := insertUidsTopKByScore(nil, uids, tc.keepCount, simType, scoreFn)
+			// Check that the remaining elements are the best ones
+			keptScores := make([]float64, len(keptUids))
+			for i, uid := range keptUids {
+				keptScores[i] = scoreMap[uid]
+			}
+
+			// Sort both for comparison
+			slices.Sort(keptScores)
+			expectedSorted := make([]float64, len(tc.expectedBest))
+			copy(expectedSorted, tc.expectedBest)
+			slices.Sort(expectedSorted)
+
+			if !slices.Equal(keptScores, expectedSorted) {
+				t.Errorf("Expected to keep scores %v, but got %v", expectedSorted, keptScores)
+			}
+		})
+	}
+}
+
+// TestSearchReturnsCorrectOrderForAllMetrics verifies that search returns
+// the most relevant results for each metric type.
+func TestSearchReturnsCorrectOrderForAllMetrics(t *testing.T) {
+	// Test data: vectors that have clear ordering differences
+	// Vec A (uid=10): [1, 0, 0] - unit vector along x-axis
+	// Vec B (uid=20): [0.9, 0.1, 0] - close to x-axis (high cosine sim to A)
+	// Vec C (uid=30): [0.1, 0.9, 0] - far from x-axis (low cosine sim to A)
+	// Query: [1, 0, 0]
+
+	testCases := []struct {
+		name       string
+		metricType string
+	}{
+		{"Euclidean", Euclidean},
+		{"Cosine", Cosine},
+		{"DotProd", DotProd},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			emptyTsDbs()
+
+			// Use "0-" prefix like other tests (namespace format)
+			pred := "0-test" + tc.metricType
+			flatPh := &persistentHNSW[float64]{
+				maxLevels:      1,
+				efConstruction: 16,
+				efSearch:       12,
+				pred:           pred,
+				vecEntryKey:    ConcatStrings(pred, VecEntry),
+				vecKey:         ConcatStrings(pred, VecKeyword),
+				vecDead:        ConcatStrings(pred, VecDead),
+				floatBits:      64,
+				simType:        GetSimType[float64](tc.metricType, 64),
+				nodeAllEdges:   make(map[uint64][][]uint64),
+			}
+
+			// Insert vectors
+			inserts := []insertToPersistentFlatStorageTest{
+				{
+					tc:     NewTxnCache(&inMemTxn{startTs: 0, commitTs: 1}, 0),
+					inUuid: uint64(10),
+					inVec:  []float64{1.0, 0.0, 0.0},
+				},
+				{
+					tc:     NewTxnCache(&inMemTxn{startTs: 1, commitTs: 2}, 1),
+					inUuid: uint64(20),
+					inVec:  []float64{0.9, 0.1, 0.0},
+				},
+				{
+					tc:     NewTxnCache(&inMemTxn{startTs: 2, commitTs: 3}, 2),
+					inUuid: uint64(30),
+					inVec:  []float64{0.1, 0.9, 0.0},
+				},
+			}
+
+			for _, in := range inserts {
+				for i := range tsDbs {
+					key := DataKey(flatPh.pred, in.inUuid)
+					tsDbs[i].inMemTestDb[string(key[:])] = floatArrayAsBytes(in.inVec)
+				}
+				_, err := flatPh.Insert(context.TODO(), in.tc, in.inUuid, in.inVec)
+				if err != nil {
+					t.Fatalf("Insert failed: %v", err)
+				}
+			}
+
+			// Search for vector closest to [1, 0, 0]
+			query := []float64{1.0, 0.0, 0.0}
+			qc := NewQueryCache(&inMemLocalCache{readTs: 10}, 10)
+			results, err := flatPh.Search(context.TODO(), qc, query, 2, index.AcceptAll[float64])
+			if err != nil {
+				t.Fatalf("Search failed: %v", err)
+			}
+
+			if len(results) == 0 {
+				t.Fatal("Expected at least one result")
+			}
+
+			// The first result should be the query vector itself (uid=10) or
+			// the closest match (uid=20). Both are acceptable as "top".
+			// What matters is that uid=30 is NOT first (it's the farthest).
+			if results[0] == 30 {
+				t.Errorf("Expected uid 10 or 20 to be first, but got uid 30 (farthest vector)")
+			}
+		})
+	}
+}
