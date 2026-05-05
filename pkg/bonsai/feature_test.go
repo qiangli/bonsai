@@ -578,6 +578,85 @@ func TestFeatureExportImportRoundtrip(t *testing.T) {
 	}
 }
 
+// within(geo, polygon) — points stored, query asks for points inside a
+// polygon. Reuses the same NYC/LA fixture as TestFeatureGeoNear.
+func TestFeatureGeoWithin(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(exact) .\nloc: geo @index(geo) .\n")
+	mustMutate(t, db, `
+		_:a <name> "TimesSquare" .
+		_:a <loc>  "{\"type\":\"Point\",\"coordinates\":[-73.9857,40.7580]}"^^<geo:geojson> .
+		_:b <name> "EmpireState" .
+		_:b <loc>  "{\"type\":\"Point\",\"coordinates\":[-73.9857,40.7484]}"^^<geo:geojson> .
+		_:c <name> "LAX" .
+		_:c <loc>  "{\"type\":\"Point\",\"coordinates\":[-118.4081,33.9425]}"^^<geo:geojson> .
+	`)
+	// Manhattan-ish bounding box (-74.05,-73.90 lng × 40.70,40.80 lat).
+	got := mustQuery(t, db, `{
+		q(func: within(loc, [[[-74.05,40.70],[-73.90,40.70],[-73.90,40.80],[-74.05,40.80],[-74.05,40.70]]])) {
+			name
+		}
+	}`)
+	if !strings.Contains(got, "TimesSquare") || !strings.Contains(got, "EmpireState") {
+		t.Errorf("within() missed NYC points: %s", got)
+	}
+	if strings.Contains(got, "LAX") {
+		t.Errorf("within() returned LA point: %s", got)
+	}
+}
+
+// contains(geo, point) — stored polygons, query asks which polygons
+// contain a given point. Stores two non-overlapping polygons (a NYC box
+// and an LA box) and asks for the polygon that contains a Manhattan
+// coordinate.
+func TestFeatureGeoContains(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(exact) .\narea: geo @index(geo) .\n")
+	mustMutate(t, db, `
+		_:nyc <name> "ManhattanBox" .
+		_:nyc <area> "{\"type\":\"Polygon\",\"coordinates\":[[[-74.05,40.70],[-73.90,40.70],[-73.90,40.80],[-74.05,40.80],[-74.05,40.70]]]}"^^<geo:geojson> .
+		_:la  <name> "LABox" .
+		_:la  <area> "{\"type\":\"Polygon\",\"coordinates\":[[[-118.50,33.90],[-118.30,33.90],[-118.30,34.10],[-118.50,34.10],[-118.50,33.90]]]}"^^<geo:geojson> .
+	`)
+	// Times Square coordinates — should land in the Manhattan box.
+	got := mustQuery(t, db, `{
+		q(func: contains(area, [-73.9857, 40.7580])) { name }
+	}`)
+	if !strings.Contains(got, "ManhattanBox") {
+		t.Errorf("contains() missed enclosing polygon: %s", got)
+	}
+	if strings.Contains(got, "LABox") {
+		t.Errorf("contains() returned non-enclosing polygon: %s", got)
+	}
+}
+
+// intersects(geo, polygon) — stored polygons, query asks which intersect
+// a given polygon (overlap or touch). One stored box overlaps the query
+// rectangle, the other is far away.
+func TestFeatureGeoIntersects(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(exact) .\narea: geo @index(geo) .\n")
+	mustMutate(t, db, `
+		_:nyc <name> "ManhattanBox" .
+		_:nyc <area> "{\"type\":\"Polygon\",\"coordinates\":[[[-74.05,40.70],[-73.90,40.70],[-73.90,40.80],[-74.05,40.80],[-74.05,40.70]]]}"^^<geo:geojson> .
+		_:la  <name> "LABox" .
+		_:la  <area> "{\"type\":\"Polygon\",\"coordinates\":[[[-118.50,33.90],[-118.30,33.90],[-118.30,34.10],[-118.50,34.10],[-118.50,33.90]]]}"^^<geo:geojson> .
+	`)
+	// Query rectangle straddling -74.00 long, 40.75 lat — overlaps the
+	// Manhattan box but is nowhere near LA.
+	got := mustQuery(t, db, `{
+		q(func: intersects(area, [[[-74.00,40.75],[-73.95,40.75],[-73.95,40.78],[-74.00,40.78],[-74.00,40.75]]])) {
+			name
+		}
+	}`)
+	if !strings.Contains(got, "ManhattanBox") {
+		t.Errorf("intersects() missed overlapping polygon: %s", got)
+	}
+	if strings.Contains(got, "LABox") {
+		t.Errorf("intersects() returned non-overlapping polygon: %s", got)
+	}
+}
+
 // similar_to() over an HNSW vector index. Inserts three 2D points, asks
 // for the two nearest to (0,0), expects the close pair back and the far
 // one excluded.
