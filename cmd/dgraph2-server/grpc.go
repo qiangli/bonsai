@@ -83,14 +83,25 @@ func (g *grpcAdapter) Alter(ctx context.Context, op *api.Operation) (*api.Payloa
 	}
 	switch {
 	case op.DropAll:
-		// Not implemented yet — return an error so callers get a clear signal.
-		return nil, errNotImplementedf("DropAll is not implemented in dgraph2")
+		if err := g.db.DropAll(ctx); err != nil {
+			return nil, err
+		}
+		return &api.Payload{}, nil
 	case op.DropOp == api.Operation_DATA:
-		return nil, errNotImplementedf("DropData is not implemented in dgraph2")
+		if err := g.db.DropData(ctx); err != nil {
+			return nil, err
+		}
+		return &api.Payload{}, nil
 	case op.DropOp == api.Operation_ATTR:
-		return nil, errNotImplementedf("DropAttr is not implemented in dgraph2")
+		if err := g.db.DropPredicate(ctx, op.DropValue); err != nil {
+			return nil, err
+		}
+		return &api.Payload{}, nil
 	case op.DropOp == api.Operation_TYPE:
-		return nil, errNotImplementedf("DropType is not implemented in dgraph2")
+		if err := g.db.DropType(ctx, op.DropValue); err != nil {
+			return nil, err
+		}
+		return &api.Payload{}, nil
 	}
 	if op.Schema != "" {
 		if err := g.db.Alter(ctx, op.Schema); err != nil {

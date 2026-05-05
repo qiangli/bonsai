@@ -731,6 +731,99 @@ func TestUpsert(t *testing.T) {
 	}
 }
 
+// TestDropAll wipes the DB and confirms data is gone, then re-Alters and
+// re-mutates to make sure the DB is usable again.
+func TestDropAll(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	mustAlter(t, db, "name: string @index(exact) .\n")
+	mustMutate(t, db, `_:a <name> "Doomed" .`)
+
+	// Verify data is there.
+	r := mustQuery(t, db, `{ q(func: eq(name, "Doomed")) { name } }`)
+	if !strings.Contains(r, "Doomed") {
+		t.Fatalf("pre-drop missing: %s", r)
+	}
+
+	if err := db.DropAll(ctx); err != nil {
+		t.Fatalf("DropAll: %v", err)
+	}
+
+	// Schema is gone after DropAll, so re-Alter then re-Mutate.
+	mustAlter(t, db, "name: string @index(exact) .\n")
+	r = mustQuery(t, db, `{ q(func: eq(name, "Doomed")) { name } }`)
+	if strings.Contains(r, "Doomed") {
+		t.Errorf("DropAll didn't drop: %s", r)
+	}
+	mustMutate(t, db, `_:a <name> "After" .`)
+	r = mustQuery(t, db, `{ q(func: eq(name, "After")) { name } }`)
+	if !strings.Contains(r, "After") {
+		t.Errorf("post-drop write/read failed: %s", r)
+	}
+}
+
+// TestDropData wipes data but keeps schema.
+func TestDropData(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	mustAlter(t, db, "name: string @index(exact) .\n")
+	mustMutate(t, db, `_:a <name> "Vanish" .`)
+
+	if err := db.DropData(ctx); err != nil {
+		t.Fatalf("DropData: %v", err)
+	}
+	r := mustQuery(t, db, `{ q(func: eq(name, "Vanish")) { name } }`)
+	if strings.Contains(r, "Vanish") {
+		t.Errorf("DropData didn't drop: %s", r)
+	}
+	// Schema must still be there: re-mutate without re-Alter.
+	mustMutate(t, db, `_:b <name> "Reborn" .`)
+	r = mustQuery(t, db, `{ q(func: eq(name, "Reborn")) { name } }`)
+	if !strings.Contains(r, "Reborn") {
+		t.Errorf("post-DropData write/read failed: %s", r)
+	}
+}
+
+// TestDropPredicate removes a single predicate's data + schema.
+func TestDropPredicate(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	mustAlter(t, db, "name: string @index(exact) .\nemail: string .\n")
+	mustMutate(t, db, `
+		_:a <name>  "Alice" .
+		_:a <email> "a@b.c" .
+	`)
+	if err := db.DropPredicate(ctx, "email"); err != nil {
+		t.Fatalf("DropPredicate: %v", err)
+	}
+	r := mustQuery(t, db, `{ q(func: eq(name, "Alice")) { name } }`)
+	if !strings.Contains(r, "Alice") {
+		t.Errorf("DropPredicate dropped wrong predicate: %s", r)
+	}
+}
+
+// TestMutateJSON exercises the SetJson and DeleteJson paths.
+func TestMutateJSON(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	mustAlter(t, db, "name: string @index(exact) .\nage: int .\n")
+
+	resp, err := db.Mutate(ctx, &apiproto.Mutation{SetJson: []byte(
+		`[{"name":"JsonAlice","age":30},{"name":"JsonBob","age":25}]`,
+	)})
+	if err != nil {
+		t.Fatalf("SetJson: %v", err)
+	}
+	if len(resp.Uids) == 0 {
+		t.Errorf("SetJson returned no UIDs: %v", resp.Uids)
+	}
+
+	r := mustQuery(t, db, `{ q(func: eq(name, "JsonAlice")) { name age } }`)
+	if !strings.Contains(r, "JsonAlice") || !strings.Contains(r, "30") {
+		t.Errorf("SetJson roundtrip missed: %s", r)
+	}
+}
+
 // TestZeroUidRejected verifies the documented invariant that subject UID
 // zero is rejected on Set and Get.
 func TestZeroUidRejected(t *testing.T) {

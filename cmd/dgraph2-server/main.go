@@ -27,11 +27,13 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
 )
@@ -40,6 +42,8 @@ func main() {
 	dir := flag.String("dir", "./dgraph2-data", "data directory (Badger lives at <dir>/p)")
 	addr := flag.String("http", ":8080", "HTTP listen address")
 	grpcAddr := flag.String("grpc", ":9080", "gRPC listen address")
+	tlsCert := flag.String("tls-cert", "", "PEM-encoded TLS cert (enables TLS on both HTTP and gRPC)")
+	tlsKey := flag.String("tls-key", "", "PEM-encoded TLS private key")
 	flag.Parse()
 
 	db, err := dgraph2.Open(dgraph2.Options{Dir: *dir})
@@ -71,10 +75,27 @@ func main() {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	srv := &http.Server{Addr: *addr, Handler: mux}
+	// HTTP server with sane production-grade timeouts.
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+	}
 
 	// gRPC server.
-	gs := grpc.NewServer()
+	var grpcOpts []grpc.ServerOption
+	if *tlsCert != "" && *tlsKey != "" {
+		creds, err := credentials.NewServerTLSFromFile(*tlsCert, *tlsKey)
+		if err != nil {
+			log.Fatalf("load TLS: %v", err)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(creds))
+	}
+	gs := grpc.NewServer(grpcOpts...)
 	api.RegisterDgraphServer(gs, newGRPCAdapter(db))
 	gln, err := net.Listen("tcp", *grpcAddr)
 	if err != nil {
@@ -99,8 +120,14 @@ func main() {
 	}()
 
 	log.Printf("dgraph2-server HTTP listening on %s, data at %s", *addr, *dir)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("ListenAndServe: %v", err)
+	var httpErr error
+	if *tlsCert != "" && *tlsKey != "" {
+		httpErr = srv.ListenAndServeTLS(*tlsCert, *tlsKey)
+	} else {
+		httpErr = srv.ListenAndServe()
+	}
+	if httpErr != nil && !errors.Is(httpErr, http.ErrServerClosed) {
+		log.Fatalf("ListenAndServe: %v", httpErr)
 	}
 }
 

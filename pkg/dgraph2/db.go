@@ -486,6 +486,25 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 			nquads = append(nquads, taggedNQ{q: q, delete: true})
 		}
 	}
+	// JSON mutations.
+	if len(m.SetJson) > 0 {
+		nq, _, err := chunker.ParseJSON(m.SetJson, chunker.SetNquads)
+		if err != nil {
+			return nil, fmt.Errorf("Mutate: parse SetJson: %w", err)
+		}
+		for _, q := range nq {
+			nquads = append(nquads, taggedNQ{q: q, delete: false})
+		}
+	}
+	if len(m.DeleteJson) > 0 {
+		nq, _, err := chunker.ParseJSON(m.DeleteJson, chunker.DeleteNquads)
+		if err != nil {
+			return nil, fmt.Errorf("Mutate: parse DeleteJson: %w", err)
+		}
+		for _, q := range nq {
+			nquads = append(nquads, taggedNQ{q: q, delete: true})
+		}
+	}
 
 	// Substitute blank-node references with fresh UIDs.
 	xidMap := map[string]uint64{}
@@ -535,6 +554,73 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 }
 
 func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
+
+// DropAll wipes every key from Badger and re-applies the reserved schema.
+// Equivalent to upstream's `Operation{DropAll: true}`.
+func (d *DB) DropAll(ctx context.Context) error {
+	if err := d.pstore.DropAll(); err != nil {
+		return fmt.Errorf("DropAll: %w", err)
+	}
+	posting.ResetCache()
+	schema.State().DeleteAll()
+	worker.SeedLocalTs(1)
+	d.tsCount.Store(1)
+	posting.Oracle().ProcessDelta(&pb.OracleDelta{MaxAssigned: 1})
+	return d.applyInitialSchema()
+}
+
+// DropData wipes data while preserving the schema. Drops all DataKey,
+// IndexKey, ReverseKey, CountKey prefixes; keeps SchemaKey + TypeKey.
+func (d *DB) DropData(ctx context.Context) error {
+	prefixes := [][]byte{
+		{x.ByteData},
+		{x.ByteIndex},
+		{x.ByteReverse},
+		{x.ByteCount},
+		{x.ByteCountRev},
+	}
+	if err := d.pstore.DropPrefix(prefixes...); err != nil {
+		return fmt.Errorf("DropData: %w", err)
+	}
+	posting.ResetCache()
+	return nil
+}
+
+// DropPredicate removes all data and indexes for one predicate. The
+// argument can be the bare name ("name") or already-namespaced
+// ("0-name"); we coerce to the namespaced form here.
+func (d *DB) DropPredicate(ctx context.Context, predicate string) error {
+	attr := predicate
+	if !looksNamespaced(attr) {
+		attr = x.NamespaceAttr(x.RootNamespace, attr)
+	}
+	pk := x.ParsedKey{Attr: attr}
+	prefixes := [][]byte{
+		pk.DataPrefix(),
+		pk.IndexPrefix(),
+		pk.ReversePrefix(),
+		pk.CountPrefix(true),
+		pk.CountPrefix(false),
+	}
+	if err := d.pstore.DropPrefix(prefixes...); err != nil {
+		return fmt.Errorf("DropPredicate: %w", err)
+	}
+	if err := schema.State().Delete(attr, d.nextTs()); err != nil {
+		return fmt.Errorf("DropPredicate: schema delete: %w", err)
+	}
+	posting.ResetCache()
+	return nil
+}
+
+// DropType removes a type definition by name (does not affect predicate
+// data). The type definition is the schema-language `type T { ... }`
+// declaration.
+func (d *DB) DropType(ctx context.Context, typeName string) error {
+	if err := schema.State().DeleteType(typeName, d.nextTs()); err != nil {
+		return fmt.Errorf("DropType: %w", err)
+	}
+	return nil
+}
 
 // SchemaText returns the active schema in DQL form, suitable for handing
 // back to Alter on a fresh DB. Reserved (dgraph.* / 0-dgraph.*) predicates
