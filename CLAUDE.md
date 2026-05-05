@@ -22,55 +22,73 @@ reference the old name in their messages.
 ## Build / test / run
 
 ```
-make build      # go build ./cmd/bonsai-server
-make test       # go test -count=1 ./pkg/bonsai/... ./cmd/bonsai-server/...
-make vet        # go vet — only on bonsai-authored packages (see note below)
+make build      # builds the single `bonsai` binary
+make test       # tests pkg/bonsai, pkg/graphql, pkg/audit, pkg/ui, cmd/bonsai/server
+make vet        # vet bonsai-authored packages only (see note below)
 make all        # vet + build + test
-make clean      # rm bonsai-server
+make clean      # rm bonsai
 
 # Run a single test
 go test -count=1 -run TestDQLEdgeTraversal ./pkg/bonsai/...
-go test -count=1 -run TestServerHTTP       ./cmd/bonsai-server/...
+go test -count=1 -run TestServerHTTP       ./cmd/bonsai/server/...
 
-# Run the server
-./bonsai-server --dir ./data --http :8080 --grpc :9080
-./bonsai-server --dir ./data --trace-stdout                    # OTel stdout exporter
-./bonsai-server --tls-cert cert.pem --tls-key key.pem ...      # TLS on both HTTP+gRPC
+# Run the server (subcommand of the merged binary)
+./bonsai server --dir ./data --http :8080 --grpc :9080
+./bonsai server --dir ./data --trace-stdout                    # OTel stdout exporter
+./bonsai server --tls-cert cert.pem --tls-key key.pem ...      # TLS on both HTTP+gRPC
 
-# CLI client (talks to the gRPC server)
-./bonsai-cli alter '<schema>'
-./bonsai-cli query '<dql>'
-./bonsai-cli mutate '<rdf>'
-./bonsai-cli drop-all | drop-data
+# Client subcommands (talk to the gRPC server)
+./bonsai alter '<schema>'
+./bonsai query '<dql>'
+./bonsai mutate '<rdf>'
+./bonsai drop-all | drop-data
+
+# Loaders
+./bonsai bulk --dir ./data --rdfs goldendata.rdf
+./bonsai live --addr 127.0.0.1:9080 --rdfs data.rdf
 ```
 
-`make vet` deliberately scopes to `pkg/bonsai/...`, `cmd/bonsai-server/...`, `worker/...`.
+`make vet` deliberately scopes to `pkg/bonsai/...`, `cmd/bonsai/...`, `worker/...`.
 `go vet ./...` reports many pre-existing `copylocks` warnings in proto-generated upstream
 types — those are inherited and unrelated to bonsai work. Don't try to "fix" them.
 
 ## Architecture
 
 ```
-cmd/bonsai-server/    HTTP + gRPC server. HTTP routes: /query /mutate /alter /set /get
-                       /assign /admin/{backup,restore,export,schema,state,draining,
-                       shutdown,namespace} /metrics /debug/pprof/*. The gRPC adapter
-                       (grpc.go) implements api.DgraphServer by delegating to *bonsai.DB,
-                       so existing dgo/v250 clients connect unchanged.
-cmd/bonsai-cli/       Thin gRPC client. Stateless, reconnects per invocation.
-pkg/bonsai/           The Go API: DB.{Open,Close,Alter,Mutate,Query,QueryWithVars,
-                       Upsert,Set,Get,Backup,RestoreFrom,Export,Drop{All,Data,Predicate,
-                       Type},SchemaText,AssignUid,CreateNamespace,DropNamespace,
-                       ListNamespaces}. db_test.go and feature_test.go are the e2e suite.
-worker/                Ported from priorart with cluster forwarding paths excised.
-                       mutation.go (runMutation, MutateOverNetwork), task.go (full
-                       processTask — eq/ge/le/has/uid/sort/count/regex), sort.go,
-                       match/compare/stringfilter/trigram/aggregator/tokens.
-posting/ schema/ dql/  Core upstream packages, preserved and patched.
+cmd/bonsai/             single binary; main.go dispatches on os.Args[1] to:
+cmd/bonsai/server/        HTTP + gRPC server. Routes: /query /mutate /alter /set /get
+                          /assign /commit /abort /graphql /graphql/subscribe /ui
+                          /admin/{backup,restore,export,import,schema,state,draining,
+                          shutdown,namespace,config} /metrics /debug/pprof/*. The
+                          gRPC adapter (grpc.go) implements api.DgraphServer so
+                          existing dgo/v250 clients connect unchanged.
+cmd/bonsai/cli/           Thin gRPC + HTTP client (alter/query/mutate/drop-* via
+                          gRPC; backup/restore/export/import/download via HTTP).
+cmd/bonsai/bulk/          Offline RDF/JSON ingest, opens the embedded DB directly.
+cmd/bonsai/live/          Streaming RDF/JSON ingest over gRPC.
+pkg/bonsai/             Go API: DB.{Open,Close,Alter,Mutate,Query,QueryWithVars,
+                        QueryAsOf,Upsert,Set,Get,Backup,RestoreFrom,Export,
+                        ExportTo,Drop{All,Data,Predicate,Type},SchemaText,
+                        AssignUid,CreateNamespace,DropNamespace,ListNamespaces,
+                        BackupTo,RestoreFromManifest,RestoreFromManifestWithOptions}.
+                        db_test.go and feature_test.go are the e2e suite.
+pkg/graphql/            GraphQL → DQL translator + WebSocket subscriptions.
+pkg/audit/              JSON-lines audit log.
+pkg/ui/                 Embedded Explorer (HTML+JS via go:embed).
+worker/                 Ported from priorart with cluster forwarding paths excised.
+                        mutation.go (runMutation, MutateOverNetwork), task.go (full
+                        processTask — eq/ge/le/has/uid/sort/count/regex), sort.go,
+                        match/compare/stringfilter/trigram/aggregator/tokens.
+posting/ schema/ dql/   Core upstream packages, preserved and patched.
 query/ types/ tok/
 algo/ codec/ lex/
 x/ protos/ task/
-priorart/dgraph/       Gitignored reference copy of upstream. Read-only source for porting.
+priorart/dgraph/        Gitignored reference copy of upstream. Read-only source for porting.
 ```
+
+The dispatcher resets both stdlib `flag.CommandLine` and `pflag.CommandLine` before
+calling each subcommand's `Main()`, so cli/bulk/live (stdlib `flag`) and server
+(`pflag`) coexist in one binary without collision.
 
 ## Critical invariants
 

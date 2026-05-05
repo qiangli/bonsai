@@ -6,11 +6,15 @@ reference
 /build
 /installs
 /coverage.out
+/bonsai
+/dgraph
+
+# Stale per-subcommand binaries from the pre-merger layout (cmd/bonsai-{server,cli,bulk,live}).
+# Kept here so an accidental `go build ./cmd/...` from old shell history doesn't get committed.
 /bonsai-server
 /bonsai-cli
 /bonsai-bulk
 /bonsai-live
-/dgraph
 
 # IDE
 .idea

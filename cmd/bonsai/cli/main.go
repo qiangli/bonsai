@@ -18,7 +18,7 @@
  *
  * The client is stateless and reconnects per invocation.
  */
-package main
+package cli
 
 import (
 	"context"
@@ -37,7 +37,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-func main() {
+func Main() {
 	addr := flag.String("addr", "127.0.0.1:9080", "gRPC server address")
 	httpAddr := flag.String("http", "http://127.0.0.1:8080", "HTTP base URL (used for backup/restore/export)")
 	timeout := flag.Duration("timeout", 30*time.Second, "request timeout")

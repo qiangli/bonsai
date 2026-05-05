@@ -13,7 +13,7 @@
  * honoured by the OTLP exporters when --trace-endpoint is left blank.
  */
 
-package main
+package server
 
 import (
 	"context"

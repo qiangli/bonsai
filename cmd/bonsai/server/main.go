@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// bonsai-server is the thin CLI/HTTP wrapper around pkg/bonsai.
+// bonsai server is the thin CLI/HTTP wrapper around pkg/bonsai.
 //
 // It opens an embedded bonsai DB and exposes the smoke-test surface over
 // HTTP: schema alter, single-triple set/get, backup, restore. The full DQL
 // gRPC surface (worker.MutateOverNetwork / ProcessTaskOverNetwork) is still
 // stubbed in the worker package; once those are wired this binary will grow
 // to register `api.DgraphServer` and the rest of the upstream HTTP routes.
-package main
+package server
 
 import (
 	"context"
@@ -42,9 +42,10 @@ import (
 	"github.com/qiangli/bonsai/pkg/ui"
 )
 
-// version is set at build time via -ldflags "-X main.version=...". It's
-// returned by the gRPC CheckVersion RPC and tagged onto OTel spans.
-var version = "dev"
+// Version is set by the top-level dispatcher (cmd/bonsai/main.go) before
+// calling Main; that value comes from `-ldflags "-X main.version=..."`.
+// It's returned by the gRPC CheckVersion RPC and tagged onto OTel spans.
+var Version = "dev"
 
 // serverConfig is the effective configuration after flag parsing. It backs
 // /admin/config for read-only introspection. Pointer fields (draining) reflect
@@ -63,7 +64,7 @@ type serverConfig struct {
 	Draining      bool   `json:"draining"`
 }
 
-func main() {
+func Main() {
 	configFile := flag.String("config", "", "YAML config file (overridden by env BONSAI_* and CLI flags)")
 	dir := flag.String("dir", "./bonsai-data", "data directory (Badger lives at <dir>/p)")
 	addr := flag.String("http", ":8080", "HTTP listen address")
@@ -107,7 +108,7 @@ func main() {
 		endpoint:    *traceEndpoint,
 		insecure:    *traceInsecure,
 		serviceName: *traceServiceName,
-		version:     version,
+		version:     Version,
 	})
 	if err != nil {
 		log.Fatalf("tracing setup: %v", err)
@@ -171,7 +172,7 @@ func main() {
 	mux.HandleFunc("/admin/shutdown", handleAdminShutdown(stop))
 	mux.HandleFunc("/admin/namespace", handleAdminNamespace(db))
 	mux.HandleFunc("/admin/config", handleAdminConfig(serverConfig{
-		Version:       version,
+		Version:       Version,
 		Dir:           *dir,
 		HTTPAddr:      *addr,
 		GRPCAddr:      *grpcAddr,
@@ -226,13 +227,13 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("bonsai-server gRPC listening on %s", *grpcAddr)
+		log.Printf("bonsai server gRPC listening on %s", *grpcAddr)
 		if err := gs.Serve(gln); err != nil {
 			log.Printf("gRPC Serve: %v", err)
 		}
 	}()
 
-	log.Printf("bonsai-server HTTP listening on %s, data at %s", *addr, *dir)
+	log.Printf("bonsai server HTTP listening on %s, data at %s", *addr, *dir)
 	var httpErr error
 	if *tlsCert != "" && *tlsKey != "" {
 		httpErr = srv.ListenAndServeTLS(*tlsCert, *tlsKey)
@@ -565,7 +566,7 @@ func handleAdminState(db *bonsai.DB) http.HandlerFunc {
 		out := map[string]any{
 			"namespaces": nss,
 			"max_uid":    db.MaxUid(),
-			"version":    "bonsai-0.1.0",
+			"version":    "bonsai-" + Version,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)

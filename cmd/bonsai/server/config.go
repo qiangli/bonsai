@@ -9,7 +9,7 @@
  * dereferencing the flag pointers it already has.
  */
 
-package main
+package server
 
 import (
 	"fmt"

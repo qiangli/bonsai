@@ -2,24 +2,21 @@
  * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * bonsai-bulk — offline batch loader for the embedded bonsai DB.
+ * bonsai-live — streaming RDF/JSON ingest against a running bonsai-server.
  *
- * The upstream `dgraph bulk` command predates this fork; it shards the
- * input across multiple groups, builds Badger LSM levels in parallel,
- * and emits ready-made on-disk shards. bonsai is single-node, so the
- * sharding pipeline is unnecessary. This tool opens the DB directly,
- * streams RDF or JSON through the same chunker the live loader uses,
- * and writes batched mutations to the local posting store.
+ * Differences from bonsai-bulk:
+ *   - bonsai-live talks to a running bonsai-server over gRPC; bulk opens
+ *     the embedded DB directly.
+ *   - Use live when the server must stay up (e.g. to serve queries during
+ *     the load); use bulk when raw ingest speed matters and downtime is
+ *     acceptable.
  *
  * Typical use:
  *
- *	bonsai-bulk --dir ./data --schema schema.dql --rdfs goldendata.rdf.gz
- *	bonsai-bulk --dir ./data --json data.json --batch 1000
- *
- * The bonsai-server must NOT be running on the same --dir at the same
- * time; bulk holds an exclusive Badger lock.
+ *	bonsai-live --addr 127.0.0.1:9080 --schema schema.dql --rdfs data.rdf.gz
+ *	bonsai-live --addr remote:9080 --json data.json --batch 1000
  */
-package main
+package live
 
 import (
 	"bufio"
@@ -36,19 +33,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/dgraph-io/dgo/v250"
+	"github.com/dgraph-io/dgo/v250/protos/api"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/qiangli/bonsai/chunker"
-	"github.com/qiangli/bonsai/pkg/bonsai"
 )
 
-func main() {
-	dir := flag.String("dir", "./bonsai-data", "data directory (must not be in use by bonsai-server)")
+func Main() {
+	addr := flag.String("addr", "127.0.0.1:9080", "bonsai-server gRPC address")
 	schema := flag.String("schema", "", "DQL schema file to apply before ingest (optional)")
 	rdfs := flag.String("rdfs", "", "input RDF file (.rdf or .rdf.gz)")
 	jsonInput := flag.String("json", "", "input JSON file (.json or .json.gz)")
 	batch := flag.Int("batch", 1000, "nquads per mutation")
 	concurrency := flag.Int("concurrency", runtime.NumCPU(), "parallel mutators")
+	timeout := flag.Duration("timeout", 5*time.Minute, "overall ingest timeout")
 	flag.Parse()
 
 	if *rdfs == "" && *jsonInput == "" {
@@ -58,24 +58,23 @@ func main() {
 		log.Fatal("pass exactly one of --rdfs / --json")
 	}
 
-	db, err := bonsai.Open(bonsai.Options{Dir: *dir})
+	conn, err := grpc.NewClient(*addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Open %s: %v", *dir, err)
+		log.Fatalf("dial %s: %v", *addr, err)
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			log.Printf("Close: %v", err)
-		}
-	}()
+	defer func() { _ = conn.Close() }()
+	dg := dgo.NewDgraphClient(api.NewDgraphClient(conn))
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
 
 	if *schema != "" {
 		schemaBytes, err := os.ReadFile(*schema)
 		if err != nil {
 			log.Fatalf("read schema %s: %v", *schema, err)
 		}
-		if err := db.Alter(ctx, string(schemaBytes)); err != nil {
+		if err := dg.Alter(ctx, &api.Operation{Schema: string(schemaBytes)}); err != nil {
 			log.Fatalf("Alter schema: %v", err)
 		}
 		log.Printf("schema applied")
@@ -102,7 +101,6 @@ func main() {
 
 	ch := chunker.NewChunker(format, *batch)
 
-	// Producer: read chunks, parse, push nquads onto buffer's channel.
 	var prodErr error
 	prodDone := make(chan struct{})
 	go func() {
@@ -127,7 +125,6 @@ func main() {
 		ch.NQuads().Flush()
 	}()
 
-	// Consumers: pull nquad batches and apply as mutations.
 	var wg sync.WaitGroup
 	wg.Add(*concurrency)
 	for w := 0; w < *concurrency; w++ {
@@ -137,8 +134,10 @@ func main() {
 				if len(nqs) == 0 {
 					continue
 				}
-				if _, err := db.Mutate(ctx, &apiproto.Mutation{Set: nqs}); err != nil {
+				txn := dg.NewTxn()
+				if _, err := txn.Mutate(ctx, &api.Mutation{Set: nqs, CommitNow: true}); err != nil {
 					log.Printf("mutate batch (%d nquads): %v", len(nqs), err)
+					_ = txn.Discard(ctx)
 					continue
 				}
 				nqsCount.Add(uint64(len(nqs)))
@@ -147,7 +146,6 @@ func main() {
 		}()
 	}
 
-	// Periodic progress.
 	progDone := make(chan struct{})
 	go func() {
 		t := time.NewTicker(2 * time.Second)
@@ -176,8 +174,6 @@ func main() {
 		float64(nqsCount.Load())/time.Since(start).Seconds())
 }
 
-// openInput returns a reader for an .rdf, .rdf.gz, .json, or .json.gz file.
-// The closer must be called to release file handles.
 func openInput(path string) (io.Reader, func(), error) {
 	f, err := os.Open(path)
 	if err != nil {

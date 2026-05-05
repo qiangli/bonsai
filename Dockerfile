@@ -9,10 +9,10 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/bonsai-server ./cmd/bonsai-server
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/bonsai ./cmd/bonsai
 
 FROM gcr.io/distroless/static:nonroot
-COPY --from=build /out/bonsai-server /bonsai-server
+COPY --from=build /out/bonsai /bonsai
 EXPOSE 8080 9080
-ENTRYPOINT ["/bonsai-server"]
-CMD ["--dir", "/data", "--http", ":8080", "--grpc", ":9080"]
+ENTRYPOINT ["/bonsai"]
+CMD ["server", "--dir", "/data", "--http", ":8080", "--grpc", ":9080"]

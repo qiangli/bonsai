@@ -11,7 +11,7 @@
  * that don't call them work transparently.
  */
 
-package main
+package server
 
 import (
 	"context"
@@ -123,7 +123,7 @@ func (g *grpcAdapter) CommitOrAbort(_ context.Context, tc *api.TxnContext) (*api
 // CheckVersion returns the bonsai version string. The package-level `version`
 // var in main.go is set at build time via `-ldflags "-X main.version=..."`.
 func (g *grpcAdapter) CheckVersion(_ context.Context, _ *api.Check) (*api.Version, error) {
-	return &api.Version{Tag: "bonsai-" + version}, nil
+	return &api.Version{Tag: "bonsai-" + Version}, nil
 }
 
 // RunDQL is the newer combined-DQL endpoint. Same shape as Query.
