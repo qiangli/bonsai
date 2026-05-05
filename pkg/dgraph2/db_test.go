@@ -692,6 +692,45 @@ func TestDQLBackupRestoreRoundtrip(t *testing.T) {
 	}
 }
 
+// TestUpsert exercises the upsert pattern: query a node by name, then
+// update its age via uid(v) substitution. This is the canonical
+// "upsert by external id" flow.
+func TestUpsert(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	if err := db.Alter(ctx,
+		"name: string @index(exact) .\nage: int .\n"); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:alice <name> "Alice" .
+		_:alice <age>  "30"^^<xs:int> .
+	`)}); err != nil {
+		t.Fatalf("seed Mutate: %v", err)
+	}
+
+	// Upsert: find Alice, set age to 31.
+	upsertQ := `{
+		v as var(func: eq(name, "Alice"))
+	}`
+	resp, err := db.Upsert(ctx, upsertQ, &apiproto.Mutation{SetNquads: []byte(
+		`uid(v) <age> "31"^^<xs:int> .`,
+	)})
+	if err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	t.Logf("upsert resp: query=%s mut=%v", string(resp.Json), resp.Uids)
+
+	// Verify the age was updated.
+	r, err := db.Query(ctx, `{ q(func: eq(name, "Alice")) { name age } }`)
+	if err != nil {
+		t.Fatalf("post-upsert Query: %v", err)
+	}
+	if !strings.Contains(string(r.Json), `"age":31`) {
+		t.Errorf("upsert did not update age: %s", string(r.Json))
+	}
+}
+
 // TestZeroUidRejected verifies the documented invariant that subject UID
 // zero is rejected on Set and Get.
 func TestZeroUidRejected(t *testing.T) {

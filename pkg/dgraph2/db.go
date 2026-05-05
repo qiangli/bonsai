@@ -327,6 +327,129 @@ func (d *DB) QueryWithVars(ctx context.Context, q string, vars map[string]string
 // timeNow is a hook so tests can stub time. Default uses time.Now().
 var timeNow = func() time.Time { return time.Now() }
 
+// Upsert runs an upsert: query + mutations where the mutation can refer to
+// query variables via uid(varname). The DQL parser handles the bundled
+// syntax already; here we run the query, populate variables from the
+// SubGraph results, then walk the mutation's nquads substituting `uid(v)`
+// references with the discovered uids.
+//
+// Supported subset: query + a single mutation block; uid(v) substitution
+// in subject and object positions of N-Quad mutations. More exotic upsert
+// patterns (multiple mutations, conditional mutations) require additional
+// glue.
+func (d *DB) Upsert(ctx context.Context, queryDQL string, m *apipb.Mutation) (*api.Response, error) {
+	// Parse the query, telling the parser that any vars it defines will be
+	// used by the bundled mutation. Without needVars the parser rejects
+	// var-only queries with "Some variables are defined but not used".
+	needVars := scanVarNamesFromMutation(m)
+	parsed, err := dql.ParseWithNeedVars(dql.Request{Str: queryDQL}, needVars)
+	if err != nil {
+		return nil, fmt.Errorf("Upsert: parse: %w", err)
+	}
+	readTs := worker.CurrentTs()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
+		readTs = oraTs
+	}
+	req := &query.Request{
+		ReadTs:   readTs,
+		Latency:  &query.Latency{Start: timeNow()},
+		DqlQuery: &parsed,
+	}
+	if err := req.ProcessQuery(ctx); err != nil {
+		return nil, fmt.Errorf("Upsert: process: %w", err)
+	}
+	// Build a JSON-form query response too, so callers can inspect what
+	// matched.
+	queryJson, err := query.ToJson(ctx, req.Latency, req.Subgraphs)
+	if err != nil {
+		return nil, fmt.Errorf("Upsert: ToJson: %w", err)
+	}
+	queryResp := &api.Response{Json: queryJson}
+
+	// Collect uid bindings from req.Vars (populated by ProcessQuery). Each
+	// var has a Uids list; we substitute the first uid as the canonical
+	// case for "find existing or create" upsert.
+	uidVars := map[string]uint64{}
+	for name, v := range req.Vars {
+		if v.Uids != nil && len(v.Uids.Uids) > 0 {
+			uidVars[name] = v.Uids.Uids[0]
+		}
+	}
+
+	// Substitute uid(v) tokens in mutation NQuads. The serialized RDF form
+	// lets uid(varname) appear where a UID would; we string-replace before
+	// handing to the parser. This is a pragmatic approximation of the
+	// upstream upsert path.
+	if len(uidVars) > 0 {
+		m = substituteUidVars(m, uidVars)
+	}
+	mr, err := d.Mutate(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	// Stitch the query response and mutate response together.
+	mr.Json = queryResp.Json
+	return mr, nil
+}
+
+// scanVarNamesFromMutation pulls out `uid(name)` tokens from the mutation
+// nquad bytes; those names are what the upsert query is expected to
+// define. We hand them to ParseWithNeedVars so the parser doesn't fail
+// the "defined but not used" check.
+func scanVarNamesFromMutation(m *apipb.Mutation) []string {
+	if m == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	scan := func(b []byte) {
+		s := string(b)
+		for {
+			i := strings.Index(s, "uid(")
+			if i < 0 {
+				break
+			}
+			s = s[i+4:]
+			j := strings.Index(s, ")")
+			if j < 0 {
+				break
+			}
+			name := strings.TrimSpace(s[:j])
+			if name != "" {
+				seen[name] = struct{}{}
+			}
+			s = s[j+1:]
+		}
+	}
+	scan(m.SetNquads)
+	scan(m.DelNquads)
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	return out
+}
+
+
+// substituteUidVars replaces `uid(varname)` tokens in the mutation's
+// SetNquads/DelNquads with the resolved 0xN uid for that variable.
+func substituteUidVars(m *apipb.Mutation, vars map[string]uint64) *apipb.Mutation {
+	out := proto.Clone(m).(*apipb.Mutation)
+	out.SetNquads = substVars(m.SetNquads, vars)
+	out.DelNquads = substVars(m.DelNquads, vars)
+	return out
+}
+
+func substVars(rdf []byte, vars map[string]uint64) []byte {
+	if len(rdf) == 0 || len(vars) == 0 {
+		return rdf
+	}
+	s := string(rdf)
+	for name, uid := range vars {
+		s = strings.ReplaceAll(s, "uid("+name+")", fmt.Sprintf("<0x%x>", uid))
+	}
+	return []byte(s)
+}
+
 // Mutate applies a batch of triples to the database. The mutation can be
 // supplied as RDF N-Quads (`m.SetNquads` / `m.DelNquads`) or, in future
 // versions, as JSON. Blank-node identifiers (`_:alice`) are resolved to fresh
