@@ -221,13 +221,14 @@ func (d *DB) Alter(ctx context.Context, schemaText string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	parsed, err := schema.ParseWithNamespace(schemaText, x.RootNamespace)
+	ns := x.NamespaceFromContext(ctx)
+	parsed, err := schema.ParseWithNamespace(schemaText, ns)
 	if err != nil {
 		return fmt.Errorf("Alter: parse failed: %w", err)
 	}
 	ts := d.nextTs()
 	for _, su := range parsed.Preds {
-		su = setNamespaceIfMissing(su, x.RootNamespace)
+		su = setNamespaceIfMissing(su, ns)
 
 		// Snapshot the old schema BEFORE we overwrite it; needed to decide
 		// whether indexes have to be rebuilt. We `proto.Clone` rather than
@@ -531,6 +532,7 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 	}
 
 	// Build edges; route through worker.MutateOverNetwork.
+	ns := x.NamespaceFromContext(ctx)
 	mutations := &pb.Mutations{}
 	for _, t := range nquads {
 		dq := dql.NQuad{NQuad: t.q}
@@ -538,7 +540,7 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 		if err != nil {
 			return nil, fmt.Errorf("Mutate: edge: %w", err)
 		}
-		edge.Attr = x.NamespaceAttr(x.RootNamespace, edge.Attr)
+		edge.Attr = x.NamespaceAttr(ns, edge.Attr)
 		if t.delete {
 			edge.Op = pb.DirectedEdge_DEL
 		}
@@ -554,6 +556,138 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 }
 
 func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
+
+// CreateNamespace seeds a new tenant: applies the reserved initial schema
+// for `ns` and tracks it in the namespace registry. Returns an error if
+// the namespace already exists.
+//
+// Without ACL, anyone with server access can call this; the semantics are
+// "tenant routing", not "tenant isolation with auth".
+func (d *DB) CreateNamespace(ctx context.Context, ns uint64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	existing, err := d.listNamespacesLocked()
+	if err != nil {
+		return fmt.Errorf("CreateNamespace: read registry: %w", err)
+	}
+	for _, e := range existing {
+		if e == ns {
+			return fmt.Errorf("CreateNamespace: namespace %d already exists", ns)
+		}
+	}
+	ts := worker.NextTs()
+	if err := worker.ApplyInitialSchema(ns, ts); err != nil {
+		return fmt.Errorf("CreateNamespace: apply initial schema: %w", err)
+	}
+	return d.writeNamespaceRegistry(append(existing, ns))
+}
+
+// DropNamespace tears down a tenant: drops every Badger key prefixed with
+// the namespace, plus the schema and type entries.
+func (d *DB) DropNamespace(ctx context.Context, ns uint64) error {
+	if ns == x.RootNamespace {
+		return fmt.Errorf("DropNamespace: cannot drop root namespace")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	prefix := x.NamespaceToBytes(ns)
+	// Every binary key in dgraph2 starts with: [prefix-byte][8 ns bytes][...].
+	// We have to drop each prefix-class separately.
+	for _, kind := range []byte{x.ByteData, x.ByteIndex, x.ByteReverse, x.ByteCount, x.ByteCountRev, x.ByteSchema, x.ByteType} {
+		keyPrefix := append([]byte{kind}, prefix...)
+		if err := d.pstore.DropPrefix(keyPrefix); err != nil {
+			return fmt.Errorf("DropNamespace: drop prefix %x: %w", keyPrefix, err)
+		}
+	}
+	posting.ResetCache()
+
+	// Strip schema-state entries in this namespace.
+	for _, attr := range schema.State().Predicates() {
+		nsOfAttr, _ := x.ParseNamespaceAttr(attr)
+		if nsOfAttr == ns {
+			_ = schema.State().Delete(attr, worker.NextTs())
+		}
+	}
+	for _, t := range schema.State().Types() {
+		// Type names are stored without namespace prefix in upstream;
+		// we conservatively don't auto-delete types here. Caller can
+		// DropType explicitly if needed.
+		_ = t
+	}
+
+	existing, err := d.listNamespacesLocked()
+	if err != nil {
+		return fmt.Errorf("DropNamespace: read registry: %w", err)
+	}
+	out := existing[:0]
+	for _, e := range existing {
+		if e != ns {
+			out = append(out, e)
+		}
+	}
+	return d.writeNamespaceRegistry(out)
+}
+
+// ListNamespaces returns every namespace ID known to the database (always
+// includes RootNamespace).
+func (d *DB) ListNamespaces(ctx context.Context) ([]uint64, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.listNamespacesLocked()
+}
+
+var namespaceRegistryKey = []byte("__dgraph2_namespaces")
+
+func (d *DB) listNamespacesLocked() ([]uint64, error) {
+	txn := d.pstore.NewTransactionAt(d.pstore.MaxVersion(), false)
+	defer txn.Discard()
+	it, err := txn.Get(namespaceRegistryKey)
+	if errors.Is(err, badger.ErrKeyNotFound) {
+		return []uint64{x.RootNamespace}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []uint64
+	err = it.Value(func(v []byte) error {
+		if len(v)%8 != 0 {
+			return fmt.Errorf("namespace registry: bad length %d", len(v))
+		}
+		for i := 0; i < len(v); i += 8 {
+			out = append(out, binary.BigEndian.Uint64(v[i:i+8]))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	hasRoot := false
+	for _, n := range out {
+		if n == x.RootNamespace {
+			hasRoot = true
+			break
+		}
+	}
+	if !hasRoot {
+		out = append([]uint64{x.RootNamespace}, out...)
+	}
+	return out, nil
+}
+
+func (d *DB) writeNamespaceRegistry(nss []uint64) error {
+	buf := make([]byte, 0, 8*len(nss))
+	for _, n := range nss {
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], n)
+		buf = append(buf, b[:]...)
+	}
+	wb := d.pstore.NewManagedWriteBatch()
+	defer wb.Cancel()
+	if err := wb.SetEntryAt(&badger.Entry{Key: namespaceRegistryKey, Value: buf}, worker.NextTs()); err != nil {
+		return err
+	}
+	return wb.Flush()
+}
 
 // DropAll wipes every key from Badger and re-applies the reserved schema.
 // Equivalent to upstream's `Operation{DropAll: true}`.
@@ -719,7 +853,9 @@ func (d *DB) Set(ctx context.Context, subject uint64, predicate string, value an
 	if subject == 0 {
 		return errors.New("Set: subject UID must be non-zero")
 	}
-	su, ok := schema.State().Get(ctx, x.NamespaceAttr(x.RootNamespace, predicate))
+	ns := x.NamespaceFromContext(ctx)
+	attr := x.NamespaceAttr(ns, predicate)
+	su, ok := schema.State().Get(ctx, attr)
 	if !ok {
 		return fmt.Errorf("Set: no schema for predicate %q (call Alter first)", predicate)
 	}
@@ -739,7 +875,7 @@ func (d *DB) Set(ctx context.Context, subject uint64, predicate string, value an
 
 	edge := &pb.DirectedEdge{
 		Entity:    subject,
-		Attr:      x.NamespaceAttr(x.RootNamespace, predicate),
+		Attr:      attr,
 		Value:     bin.Value.([]byte),
 		ValueType: pb.Posting_ValType(tid),
 		Op:        pb.DirectedEdge_SET,
@@ -784,7 +920,8 @@ func (d *DB) Get(ctx context.Context, subject uint64, predicate string) ([]byte,
 	if subject == 0 {
 		return nil, errors.New("Get: subject UID must be non-zero")
 	}
-	attr := x.NamespaceAttr(x.RootNamespace, predicate)
+	ns := x.NamespaceFromContext(ctx)
+	attr := x.NamespaceAttr(ns, predicate)
 	if _, ok := schema.State().Get(ctx, attr); !ok {
 		return nil, fmt.Errorf("Get: no schema for predicate %q", predicate)
 	}

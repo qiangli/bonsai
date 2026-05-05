@@ -16,6 +16,7 @@ import (
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/dgraph2/x"
 )
 
 // TestOpenClose exercises the database lifecycle: open, then close, in a
@@ -821,6 +822,142 @@ func TestMutateJSON(t *testing.T) {
 	r := mustQuery(t, db, `{ q(func: eq(name, "JsonAlice")) { name age } }`)
 	if !strings.Contains(r, "JsonAlice") || !strings.Contains(r, "30") {
 		t.Errorf("SetJson roundtrip missed: %s", r)
+	}
+}
+
+// TestNamespaceCRUD walks Create / List / Drop and confirms the registry
+// reflects each step.
+func TestNamespaceCRUD(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+
+	got, err := db.ListNamespaces(ctx)
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+	if len(got) != 1 || got[0] != 0 {
+		t.Errorf("expected [0] root, got %v", got)
+	}
+
+	if err := db.CreateNamespace(ctx, 1); err != nil {
+		t.Fatalf("CreateNamespace 1: %v", err)
+	}
+	if err := db.CreateNamespace(ctx, 2); err != nil {
+		t.Fatalf("CreateNamespace 2: %v", err)
+	}
+	if err := db.CreateNamespace(ctx, 1); err == nil {
+		t.Errorf("CreateNamespace duplicate should fail")
+	}
+
+	got, err = db.ListNamespaces(ctx)
+	if err != nil {
+		t.Fatalf("ListNamespaces: %v", err)
+	}
+	if len(got) != 3 {
+		t.Errorf("expected 3 namespaces, got %v", got)
+	}
+
+	if err := db.DropNamespace(ctx, 1); err != nil {
+		t.Fatalf("DropNamespace: %v", err)
+	}
+	got, _ = db.ListNamespaces(ctx)
+	for _, n := range got {
+		if n == 1 {
+			t.Errorf("DropNamespace did not remove ns=1: %v", got)
+		}
+	}
+
+	// Cannot drop root.
+	if err := db.DropNamespace(ctx, 0); err == nil {
+		t.Errorf("DropNamespace root should fail")
+	}
+}
+
+// TestNamespaceIsolation: the same predicate name in two namespaces holds
+// independent data; queries in one ns can't see data in another.
+func TestNamespaceIsolation(t *testing.T) {
+	db := newDB(t)
+	if err := db.CreateNamespace(context.Background(), 1); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	rootCtx := x.WithNamespace(context.Background(), 0)
+	tenantCtx := x.WithNamespace(context.Background(), 1)
+
+	// Each namespace defines `name` independently.
+	if err := db.Alter(rootCtx, "name: string @index(exact) .\n"); err != nil {
+		t.Fatalf("Alter root: %v", err)
+	}
+	if err := db.Alter(tenantCtx, "name: string @index(exact) .\n"); err != nil {
+		t.Fatalf("Alter tenant: %v", err)
+	}
+
+	// Insert different data in each.
+	if _, err := db.Mutate(rootCtx, &apiproto.Mutation{
+		SetNquads: []byte(`_:r <name> "RootUser" .`),
+	}); err != nil {
+		t.Fatalf("Mutate root: %v", err)
+	}
+	if _, err := db.Mutate(tenantCtx, &apiproto.Mutation{
+		SetNquads: []byte(`_:t <name> "TenantUser" .`),
+	}); err != nil {
+		t.Fatalf("Mutate tenant: %v", err)
+	}
+
+	// Each query sees only its own namespace.
+	rRoot, err := db.Query(rootCtx, `{ q(func: eq(name, "RootUser")) { name } }`)
+	if err != nil {
+		t.Fatalf("Query root: %v", err)
+	}
+	if !strings.Contains(string(rRoot.Json), "RootUser") {
+		t.Errorf("root ns missing RootUser: %s", string(rRoot.Json))
+	}
+
+	rTenant, err := db.Query(tenantCtx, `{ q(func: eq(name, "TenantUser")) { name } }`)
+	if err != nil {
+		t.Fatalf("Query tenant: %v", err)
+	}
+	if !strings.Contains(string(rTenant.Json), "TenantUser") {
+		t.Errorf("tenant ns missing TenantUser: %s", string(rTenant.Json))
+	}
+
+	// Cross-namespace leak check.
+	if strings.Contains(string(rRoot.Json), "TenantUser") {
+		t.Errorf("root saw tenant data: %s", string(rRoot.Json))
+	}
+	if strings.Contains(string(rTenant.Json), "RootUser") {
+		t.Errorf("tenant saw root data: %s", string(rTenant.Json))
+	}
+}
+
+// TestNamespacePersistence: namespaces survive Close/Open.
+func TestNamespacePersistence(t *testing.T) {
+	dir := t.TempDir()
+	{
+		db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("Open 1: %v", err)
+		}
+		if err := db.CreateNamespace(context.Background(), 42); err != nil {
+			t.Fatalf("CreateNamespace: %v", err)
+		}
+		_ = db.Close()
+	}
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open 2: %v", err)
+	}
+	defer db.Close()
+
+	got, _ := db.ListNamespaces(context.Background())
+	found := false
+	for _, n := range got {
+		if n == 42 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ns=42 lost after reopen: %v", got)
 	}
 }
 

@@ -235,6 +235,26 @@ func updateSchemaLocal(su *pb.SchemaUpdate, ts uint64) error {
 	return w.Flush()
 }
 
+// ApplyInitialSchema persists the reserved (`dgraph.*`) schema and type
+// definitions for the given namespace. Called by pkg/dgraph2.Open for
+// the root namespace and by CreateNamespace for new tenants.
+func ApplyInitialSchema(ns, ts uint64) error {
+	for _, su := range schema.InitialSchema(ns) {
+		if err := updateSchemaLocal(su, ts); err != nil {
+			return err
+		}
+	}
+	for _, t := range schema.InitialTypes(ns) {
+		if _, ok := schema.State().GetType(t.GetTypeName()); ok {
+			continue
+		}
+		if err := updateTypeLocal(t, ts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func updateTypeLocal(tu *pb.TypeUpdate, ts uint64) error {
 	schema.State().SetType(tu.TypeName, tu)
 	w := posting.NewTxnWriter(pstore)

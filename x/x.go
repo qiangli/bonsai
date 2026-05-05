@@ -257,12 +257,21 @@ func ExtractNamespaceHTTP(r *http.Request) uint64 {
 	return namespace
 }
 
-// ExtractNamespace parses the namespace value from the incoming gRPC context.
+// ExtractNamespace returns the namespace for the given request. dgraph2
+// resolution order:
 //
-// In dgraph2 we have no ACL/multi-tenancy, so the result is always
-// RootNamespace (= 0). The original gRPC-metadata path is preserved as a
-// fallback in case some upstream code path still attaches the metadata.
+//  1. Explicit ctx value set via x.WithNamespace (used by HTTP middleware
+//     and the library API).
+//  2. gRPC metadata key "namespace".
+//  3. RootNamespace (0).
+//
+// Without ACL, this is purely a routing tag — anyone with access to the
+// server can address any namespace. ACL would layer on top via JWT
+// signing.
 func ExtractNamespace(ctx context.Context) (uint64, error) {
+	if v, ok := ctx.Value(namespaceCtxKey).(uint64); ok {
+		return v, nil
+	}
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
 		if ns := md.Get("namespace"); len(ns) > 0 {
 			n, err := strconv.ParseUint(ns[0], 0, 64)
