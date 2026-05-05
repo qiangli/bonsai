@@ -514,6 +514,15 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 			nquads = append(nquads, taggedNQ{q: q, delete: true})
 		}
 	}
+	// Already-parsed NQuads via m.Set / m.Del (used by dgraph2-bulk and
+	// dgraph2-live, which chunk RDF/JSON in the loader and hand the parsed
+	// triples straight to Mutate).
+	for _, q := range m.Set {
+		nquads = append(nquads, taggedNQ{q: q, delete: false})
+	}
+	for _, q := range m.Del {
+		nquads = append(nquads, taggedNQ{q: q, delete: true})
+	}
 	// JSON mutations.
 	if len(m.SetJson) > 0 {
 		nq, _, err := chunker.ParseJSON(m.SetJson, chunker.SetNquads)

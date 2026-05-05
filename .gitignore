@@ -7,6 +7,9 @@ reference
 /installs
 /coverage.out
 /dgraph2-server
+/dgraph2-cli
+/dgraph2-bulk
+/dgraph2-live
 /dgraph
 
 # IDE
