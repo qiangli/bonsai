@@ -90,7 +90,12 @@ func Open(opts Options) (*DB, error) {
 	bopts := badger.DefaultOptions(pdir).
 		WithLogger(&x.ToGlog{}).
 		WithSyncWrites(false)
-	bopts.DetectConflicts = false
+	// Conflict detection is on. dgraph2 serialises all mutations behind a
+	// process-wide lock in worker/mutation.go and assigns monotonic
+	// timestamps from worker.localTs, so in practice no conflicts can fire,
+	// but Badger now tracks the read/write sets and will surface a
+	// y.ErrConflict if the invariant is ever broken.
+	bopts.DetectConflicts = true
 
 	ps, err := badger.OpenManaged(bopts)
 	if err != nil {

@@ -386,6 +386,14 @@ func handleAssign(db *dgraph2.DB) http.HandlerFunc {
 	}
 }
 
+// handleBackup writes a backup. Two formats are supported:
+//
+//	POST /admin/backup?path=<file>                    single-file Badger Stream (default)
+//	POST /admin/backup?path=<dir>&format=manifest     upstream-compatible multi-file format
+//	POST /admin/backup?path=<dir>&format=manifest&type=incremental
+//
+// The manifest format produces a directory layout that upstream `dgraph
+// restore` can consume.
 func handleBackup(db *dgraph2.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dst := r.URL.Query().Get("path")
@@ -393,11 +401,35 @@ func handleBackup(db *dgraph2.DB) http.HandlerFunc {
 			http.Error(w, "path query param required", http.StatusBadRequest)
 			return
 		}
-		if err := db.Backup(r.Context(), dst); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		switch r.URL.Query().Get("format") {
+		case "", "stream":
+			if err := db.Backup(r.Context(), dst); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = io.WriteString(w, `{"status":"ok","format":"stream"}`)
+		case "manifest":
+			t := dgraph2.BackupFull
+			if r.URL.Query().Get("type") == "incremental" {
+				t = dgraph2.BackupIncremental
+			}
+			man, err := db.BackupTo(r.Context(), dgraph2.BackupOptions{Dir: dst, Type: t})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":     "ok",
+				"format":     "manifest",
+				"backup_id":  man.BackupID,
+				"backup_num": man.BackupNum,
+				"read_ts":    man.ReadTs,
+				"path":       man.Path,
+			})
+		default:
+			http.Error(w, "format must be stream or manifest", http.StatusBadRequest)
 		}
-		_, _ = io.WriteString(w, `{"status":"ok"}`)
 	}
 }
 
@@ -537,6 +569,13 @@ func handleAdminSchema(db *dgraph2.DB) http.HandlerFunc {
 	}
 }
 
+// handleRestore reads back a backup. Format is detected from the path:
+//   - if <path> is a directory containing manifest.json, the upstream-
+//     compatible multi-file format is applied (RestoreFromManifest).
+//   - otherwise <path> is treated as a single-file Badger Stream backup
+//     (RestoreFrom).
+//
+//	POST /admin/restore?path=<path>
 func handleRestore(db *dgraph2.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		src := r.URL.Query().Get("path")
@@ -544,10 +583,18 @@ func handleRestore(db *dgraph2.DB) http.HandlerFunc {
 			http.Error(w, "path query param required", http.StatusBadRequest)
 			return
 		}
+		if fi, err := os.Stat(src); err == nil && fi.IsDir() {
+			if err := db.RestoreFromManifest(r.Context(), src); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = io.WriteString(w, `{"status":"ok","format":"manifest"}`)
+			return
+		}
 		if err := db.RestoreFrom(r.Context(), src); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		_, _ = io.WriteString(w, `{"status":"ok"}`)
+		_, _ = io.WriteString(w, `{"status":"ok","format":"stream"}`)
 	}
 }

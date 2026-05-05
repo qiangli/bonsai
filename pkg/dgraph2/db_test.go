@@ -693,6 +693,73 @@ func TestDQLBackupRestoreRoundtrip(t *testing.T) {
 	}
 }
 
+// TestBackupToManifestRoundtrip exercises the multi-file backup format:
+// take a full backup, mutate again, take an incremental, then restore the
+// chain into a fresh DB and confirm both rounds of data come back.
+func TestBackupToManifestRoundtrip(t *testing.T) {
+	src := t.TempDir()
+	bdir := t.TempDir()
+	dst := t.TempDir()
+	ctx := context.Background()
+
+	{
+		db, err := dgraph2.Open(dgraph2.Options{Dir: src})
+		if err != nil {
+			t.Fatalf("Open src: %v", err)
+		}
+		if err := db.Alter(ctx, "name: string @index(exact) .\n"); err != nil {
+			t.Fatalf("Alter: %v", err)
+		}
+		if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+			_:a <name> "FullA" .
+			_:b <name> "FullB" .
+		`)}); err != nil {
+			t.Fatalf("Mutate full: %v", err)
+		}
+		full, err := db.BackupTo(ctx, dgraph2.BackupOptions{Dir: bdir, Type: dgraph2.BackupFull})
+		if err != nil {
+			t.Fatalf("BackupTo full: %v", err)
+		}
+		if full.BackupNum != 1 || full.Type != "full" {
+			t.Errorf("full manifest wrong: %+v", full)
+		}
+
+		if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+			_:c <name> "IncrC" .
+		`)}); err != nil {
+			t.Fatalf("Mutate incr: %v", err)
+		}
+		incr, err := db.BackupTo(ctx, dgraph2.BackupOptions{Dir: bdir, Type: dgraph2.BackupIncremental})
+		if err != nil {
+			t.Fatalf("BackupTo incr: %v", err)
+		}
+		if incr.BackupNum != 2 || incr.Type != "incremental" || incr.BackupID != full.BackupID {
+			t.Errorf("incr manifest wrong: %+v (full=%+v)", incr, full)
+		}
+		_ = db.Close()
+	}
+
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dst})
+	if err != nil {
+		t.Fatalf("Open dst: %v", err)
+	}
+	defer db.Close()
+	if err := db.RestoreFromManifest(ctx, bdir); err != nil {
+		t.Fatalf("RestoreFromManifest: %v", err)
+	}
+
+	r, err := db.Query(ctx, `{ q(func: has(name)) { name } }`)
+	if err != nil {
+		t.Fatalf("Query post-restore: %v", err)
+	}
+	got := string(r.Json)
+	for _, want := range []string{"FullA", "FullB", "IncrC"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("restored chain missing %s: %s", want, got)
+		}
+	}
+}
+
 // TestUpsert exercises the upsert pattern: query a node by name, then
 // update its age via uid(v) substitution. This is the canonical
 // "upsert by external id" flow.

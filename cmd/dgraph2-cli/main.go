@@ -128,10 +128,28 @@ func runGRPC(ctx context.Context, addr string, args []string) {
 func runHTTP(ctx context.Context, base string, args []string) {
 	switch args[0] {
 	case "backup":
+		// Forms:
+		//   backup <dst>                       single-file stream
+		//   backup manifest <dir>              upstream multi-file format (full)
+		//   backup manifest <dir> incremental  incremental on top of prior chain
 		if len(args) < 2 {
 			log.Fatalf("backup: destination path required")
 		}
-		postAdmin(ctx, base, "/admin/backup", url.Values{"path": {args[1]}})
+		q := url.Values{}
+		switch args[1] {
+		case "manifest":
+			if len(args) < 3 {
+				log.Fatalf("backup manifest: destination directory required")
+			}
+			q.Set("path", args[2])
+			q.Set("format", "manifest")
+			if len(args) >= 4 {
+				q.Set("type", args[3])
+			}
+		default:
+			q.Set("path", args[1])
+		}
+		postAdmin(ctx, base, "/admin/backup", q)
 
 	case "restore":
 		if len(args) < 2 {
@@ -182,8 +200,13 @@ gRPC commands:
   drop-data                wipe data only (keep schema)
 
 HTTP /admin commands:
-  backup <dst>             write a Badger-stream backup to <dst>
-  restore <src>            restore a Badger-stream backup from <src>
+  backup <dst>             write a single-file Badger-stream backup
+  backup manifest <dir>    write an upstream-compatible multi-file backup
+  backup manifest <dir> incremental
+                           write an incremental backup on top of prior chain
+  restore <src>            restore from <src>; if <src> is a directory it is
+                           treated as a multi-file manifest backup, otherwise
+                           as a Badger-stream backup
   export <fmt> <dst>       export the database; fmt is rdf or json`)
 	os.Exit(2)
 }
