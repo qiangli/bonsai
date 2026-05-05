@@ -8,7 +8,7 @@ package hnsw
 import (
 	"container/heap"
 
-	c "github.com/qiangli/dgraph2/tok/constraints"
+	c "github.com/qiangli/bonsai/tok/constraints"
 )
 
 const notAUid uint64 = 0

@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/qiangli/dgraph2/schema"
+	"github.com/qiangli/bonsai/schema"
 )
 
 var sc = `type.object.name.en: string @index .

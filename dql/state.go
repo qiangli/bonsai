@@ -7,7 +7,7 @@
 package dql
 
 import (
-	"github.com/qiangli/dgraph2/lex"
+	"github.com/qiangli/bonsai/lex"
 )
 
 const (

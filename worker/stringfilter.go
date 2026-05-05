@@ -10,10 +10,10 @@ import (
 
 	"github.com/golang/glog"
 
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/tok"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/tok"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 type matchFunc func(types.Val, *stringFilter) bool

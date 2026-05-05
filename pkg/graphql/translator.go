@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -14,12 +14,12 @@ import (
 
 	"github.com/dgraph-io/gqlparser/v2/ast"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 )
 
 // executeQuery walks each top-level field, translates it to DQL, runs it
 // via db.Query, and merges the results into the response.
-func executeQuery(ctx context.Context, db *dgraph2.DB, op *ast.OperationDefinition, vars map[string]any) *Response {
+func executeQuery(ctx context.Context, db *bonsai.DB, op *ast.OperationDefinition, vars map[string]any) *Response {
 	resp := &Response{Data: map[string]any{}}
 	for _, sel := range op.SelectionSet {
 		f, ok := sel.(*ast.Field)
@@ -131,7 +131,7 @@ func buildSelectionSet(set ast.SelectionSet, vars map[string]any, depth int) (st
 }
 
 // executeMutation handles `addX(input: {...})` mutations.
-func executeMutation(ctx context.Context, db *dgraph2.DB, op *ast.OperationDefinition, vars map[string]any) *Response {
+func executeMutation(ctx context.Context, db *bonsai.DB, op *ast.OperationDefinition, vars map[string]any) *Response {
 	resp := &Response{Data: map[string]any{}}
 	for _, sel := range op.SelectionSet {
 		f, ok := sel.(*ast.Field)
@@ -167,7 +167,7 @@ func executeMutation(ctx context.Context, db *dgraph2.DB, op *ast.OperationDefin
 }
 
 // executeAdd builds RDF from the `input` argument and applies it.
-func executeAdd(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
+func executeAdd(ctx context.Context, db *bonsai.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
 	typ := strings.TrimPrefix(f.Name, "add")
 	if typ == "" {
 		return nil, fmt.Errorf("addX requires a type name (e.g. addPerson)")
@@ -209,7 +209,7 @@ func executeAdd(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[stri
 //	{filter: {eq: {predicate: "name", value: "Alice"}}}      eq(predicate, value)
 //
 // We resolve the filter to a DQL query, then issue a Mutate that uses uid(v).
-func executeUpdate(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
+func executeUpdate(ctx context.Context, db *bonsai.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
 	typ := strings.TrimPrefix(f.Name, "update")
 	if typ == "" {
 		return nil, fmt.Errorf("updateX requires a type name (e.g. updatePerson)")
@@ -280,9 +280,9 @@ func executeUpdate(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[s
 // executeDelete applies `delete<Type>(filter: {...}) { uids count }` by
 // resolving the filter to UIDs and then issuing a per-predicate wildcard
 // delete for every field in the type's schema definition. Upstream's
-// `<uid> * * .` form would do the same in one go, but dgraph2's worker
+// `<uid> * * .` form would do the same in one go, but bonsai's worker
 // requires a known predicate per edge, so we expand explicitly.
-func executeDelete(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
+func executeDelete(ctx context.Context, db *bonsai.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
 	typeName := strings.TrimPrefix(f.Name, "delete")
 	if typeName == "" {
 		return nil, fmt.Errorf("deleteX requires a type name (e.g. deletePerson)")
@@ -381,7 +381,7 @@ func filterToDQL(f map[string]any) (string, error) {
 }
 
 // queryFilterUids resolves a root-function to a list of UID strings via DQL.
-func queryFilterUids(ctx context.Context, db *dgraph2.DB, rootFn string) (map[string]any, error) {
+func queryFilterUids(ctx context.Context, db *bonsai.DB, rootFn string) (map[string]any, error) {
 	resp, err := db.Query(ctx, fmt.Sprintf("{ q(func: %s) { uid } }", rootFn))
 	if err != nil {
 		return nil, err

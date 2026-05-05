@@ -11,7 +11,7 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/x"
 )
 
 // EOF indicates the end of the an input.

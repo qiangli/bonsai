@@ -9,7 +9,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/qiangli/dgraph2/algo"
+	"github.com/qiangli/bonsai/algo"
 )
 
 type StatsHolder struct {

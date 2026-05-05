@@ -20,10 +20,10 @@ import (
 	"github.com/twpayne/go-geom/encoding/geojson"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/types/facets"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/types/facets"
+	"github.com/qiangli/bonsai/x"
 	"github.com/dgraph-io/simdjson-go"
 )
 

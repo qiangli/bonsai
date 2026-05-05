@@ -21,14 +21,14 @@ import (
 
 	bpb "github.com/dgraph-io/badger/v4/pb"
 	"github.com/dgraph-io/badger/v4/y"
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/codec"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
-	"github.com/qiangli/dgraph2/tok/index"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/types/facets"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/codec"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
+	"github.com/qiangli/bonsai/tok/index"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/types/facets"
+	"github.com/qiangli/bonsai/x"
 	"github.com/dgraph-io/ristretto/v2/z"
 )
 

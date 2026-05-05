@@ -257,7 +257,7 @@ func ExtractNamespaceHTTP(r *http.Request) uint64 {
 	return namespace
 }
 
-// ExtractNamespace returns the namespace for the given request. dgraph2
+// ExtractNamespace returns the namespace for the given request. bonsai
 // resolution order:
 //
 //  1. Explicit ctx value set via x.WithNamespace (used by HTTP middleware

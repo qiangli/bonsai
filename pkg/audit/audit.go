@@ -1,16 +1,16 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Audit log for dgraph2. Emits one JSON line per administrative or write
+ * Audit log for bonsai. Emits one JSON line per administrative or write
  * operation so an operator can answer "what changed and when" without
  * reading Badger logs.
  *
  * Use:
  *
- *	logger, err := audit.Open("/var/log/dgraph2-audit.log")
+ *	logger, err := audit.Open("/var/log/bonsai-audit.log")
  *	defer logger.Close()
- *	db, _ := dgraph2.Open(dgraph2.Options{Dir: "...", AuditLog: logger})
+ *	db, _ := bonsai.Open(bonsai.Options{Dir: "...", AuditLog: logger})
  *
  * Each entry is a self-contained JSON object — no array, no header — so
  * standard log shippers (Vector, Fluent Bit, Promtail) can ingest it as a

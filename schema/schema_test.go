@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/qiangli/dgraph2/protos/pb"
+	"github.com/qiangli/bonsai/protos/pb"
 )
 
 func TestCompareSchemaUpdates(t *testing.T) {

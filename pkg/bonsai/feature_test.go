@@ -1,9 +1,9 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * Validation pass for DQL features that were ported from priorart in
- * worker/task.go but never explicitly tested in dgraph2. Each test
+ * worker/task.go but never explicitly tested in bonsai. Each test
  * documents whether the feature works end-to-end, fails with a known
  * error, or is genuinely broken and needs fixing.
  *
@@ -12,7 +12,7 @@
  * the active DB pointer is per-test.
  */
 
-package dgraph2_test
+package bonsai_test
 
 import (
 	"context"
@@ -21,12 +21,12 @@ import (
 
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 )
 
-func newDB(t *testing.T) *dgraph2.DB {
+func newDB(t *testing.T) *bonsai.DB {
 	t.Helper()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: t.TempDir()})
+	db, err := bonsai.Open(bonsai.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -34,14 +34,14 @@ func newDB(t *testing.T) *dgraph2.DB {
 	return db
 }
 
-func mustAlter(t *testing.T, db *dgraph2.DB, schema string) {
+func mustAlter(t *testing.T, db *bonsai.DB, schema string) {
 	t.Helper()
 	if err := db.Alter(context.Background(), schema); err != nil {
 		t.Fatalf("Alter: %v", err)
 	}
 }
 
-func mustMutate(t *testing.T, db *dgraph2.DB, rdf string) *apiproto.Response {
+func mustMutate(t *testing.T, db *bonsai.DB, rdf string) *apiproto.Response {
 	t.Helper()
 	resp, err := db.Mutate(context.Background(), &apiproto.Mutation{SetNquads: []byte(rdf)})
 	if err != nil {
@@ -50,7 +50,7 @@ func mustMutate(t *testing.T, db *dgraph2.DB, rdf string) *apiproto.Response {
 	return resp
 }
 
-func mustQuery(t *testing.T, db *dgraph2.DB, q string) string {
+func mustQuery(t *testing.T, db *bonsai.DB, q string) string {
 	t.Helper()
 	r, err := db.Query(context.Background(), q)
 	if err != nil {

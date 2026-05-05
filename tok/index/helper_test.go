@@ -15,8 +15,8 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/qiangli/dgraph2/protos/pb"
-	c "github.com/qiangli/dgraph2/tok/constraints"
+	"github.com/qiangli/bonsai/protos/pb"
+	c "github.com/qiangli/bonsai/tok/constraints"
 	"github.com/viterin/vek/vek32"
 	"google.golang.org/protobuf/proto"
 )

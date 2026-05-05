@@ -13,7 +13,7 @@ import (
 	geom "github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/encoding/geojson"
 
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/x"
 )
 
 func edgesCrossPoints(l *s2.Loop, pts []s2.Point) bool {

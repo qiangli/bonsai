@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -16,11 +16,11 @@ import (
 
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/pkg/audit"
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/bonsai/pkg/audit"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 )
 
-// TestNilLoggerNoOp confirms a nil *Logger is safe to call — the dgraph2
+// TestNilLoggerNoOp confirms a nil *Logger is safe to call — the bonsai
 // hot path relies on this so callers don't need a guard.
 func TestNilLoggerNoOp(t *testing.T) {
 	var l *audit.Logger
@@ -68,11 +68,11 @@ func TestLogJSONLines(t *testing.T) {
 	}
 }
 
-// TestDBHooks confirms dgraph2.Open + AuditLog wires real operations
+// TestDBHooks confirms bonsai.Open + AuditLog wires real operations
 // (Alter, Mutate, DropAll, CreateNamespace) through to the audit logger.
 func TestDBHooks(t *testing.T) {
 	var buf bytes.Buffer
-	db, err := dgraph2.Open(dgraph2.Options{
+	db, err := bonsai.Open(bonsai.Options{
 		Dir:      t.TempDir(),
 		AuditLog: audit.New(&buf),
 	})

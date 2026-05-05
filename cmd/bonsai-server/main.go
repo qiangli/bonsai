@@ -1,11 +1,11 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// dgraph2-server is the thin CLI/HTTP wrapper around pkg/dgraph2.
+// bonsai-server is the thin CLI/HTTP wrapper around pkg/bonsai.
 //
-// It opens an embedded dgraph2 DB and exposes the smoke-test surface over
+// It opens an embedded bonsai DB and exposes the smoke-test surface over
 // HTTP: schema alter, single-triple set/get, backup, restore. The full DQL
 // gRPC surface (worker.MutateOverNetwork / ProcessTaskOverNetwork) is still
 // stubbed in the worker package; once those are wired this binary will grow
@@ -36,10 +36,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/qiangli/dgraph2/pkg/audit"
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
-	"github.com/qiangli/dgraph2/pkg/graphql"
-	"github.com/qiangli/dgraph2/pkg/ui"
+	"github.com/qiangli/bonsai/pkg/audit"
+	"github.com/qiangli/bonsai/pkg/bonsai"
+	"github.com/qiangli/bonsai/pkg/graphql"
+	"github.com/qiangli/bonsai/pkg/ui"
 )
 
 // version is set at build time via -ldflags "-X main.version=...". It's
@@ -64,8 +64,8 @@ type serverConfig struct {
 }
 
 func main() {
-	configFile := flag.String("config", "", "YAML config file (overridden by env DGRAPH2_* and CLI flags)")
-	dir := flag.String("dir", "./dgraph2-data", "data directory (Badger lives at <dir>/p)")
+	configFile := flag.String("config", "", "YAML config file (overridden by env BONSAI_* and CLI flags)")
+	dir := flag.String("dir", "./bonsai-data", "data directory (Badger lives at <dir>/p)")
 	addr := flag.String("http", ":8080", "HTTP listen address")
 	grpcAddr := flag.String("grpc", ":9080", "gRPC listen address")
 	tlsCert := flag.String("tls-cert", "", "PEM-encoded TLS cert (enables TLS on both HTTP and gRPC)")
@@ -76,11 +76,11 @@ func main() {
 	traceJaeger := flag.String("trace-jaeger", "", "send traces to a Jaeger collector at host:port (Jaeger 1.35+ accepts OTLP/gRPC natively); shortcut for --trace-otlp-grpc --trace-endpoint <host:port> --trace-insecure")
 	traceEndpoint := flag.String("trace-endpoint", "", "OTLP exporter endpoint host:port (default: localhost:4318 for HTTP, localhost:4317 for gRPC; OTEL_EXPORTER_OTLP_ENDPOINT also honoured)")
 	traceInsecure := flag.Bool("trace-insecure", true, "skip TLS for OTLP exporters")
-	traceServiceName := flag.String("trace-service-name", "dgraph2", "service.name resource attribute")
+	traceServiceName := flag.String("trace-service-name", "bonsai", "service.name resource attribute")
 	auditLogPath := flag.String("audit-log", "", "audit log file path (JSON lines); empty disables auditing")
 	flag.Parse()
 
-	// Wire viper for env (DGRAPH2_*) + optional YAML config.
+	// Wire viper for env (BONSAI_*) + optional YAML config.
 	// Precedence: explicit CLI flag > env > YAML > flag default.
 	if err := loadConfig(*configFile); err != nil {
 		log.Fatalf("config: %v", err)
@@ -98,7 +98,7 @@ func main() {
 		}
 	}
 
-	// Wire an OpenTelemetry tracer provider. dgraph2 has otel imports
+	// Wire an OpenTelemetry tracer provider. bonsai has otel imports
 	// throughout query/ and worker/; without an exporter the spans are no-ops.
 	shutdownTrace, err := setupTracing(context.Background(), tracingOpts{
 		stdout:      *traceStdout,
@@ -128,9 +128,9 @@ func main() {
 		log.Printf("audit log: %s", *auditLogPath)
 	}
 
-	db, err := dgraph2.Open(dgraph2.Options{Dir: *dir, AuditLog: auditLogger})
+	db, err := bonsai.Open(bonsai.Options{Dir: *dir, AuditLog: auditLogger})
 	if err != nil {
-		log.Fatalf("dgraph2.Open: %v", err)
+		log.Fatalf("bonsai.Open: %v", err)
 	}
 	defer func() {
 		if err := db.Close(); err != nil {
@@ -226,13 +226,13 @@ func main() {
 	}()
 
 	go func() {
-		log.Printf("dgraph2-server gRPC listening on %s", *grpcAddr)
+		log.Printf("bonsai-server gRPC listening on %s", *grpcAddr)
 		if err := gs.Serve(gln); err != nil {
 			log.Printf("gRPC Serve: %v", err)
 		}
 	}()
 
-	log.Printf("dgraph2-server HTTP listening on %s, data at %s", *addr, *dir)
+	log.Printf("bonsai-server HTTP listening on %s, data at %s", *addr, *dir)
 	var httpErr error
 	if *tlsCert != "" && *tlsKey != "" {
 		httpErr = srv.ListenAndServeTLS(*tlsCert, *tlsKey)
@@ -252,7 +252,7 @@ type alterReq struct {
 	Schema string `json:"schema"`
 }
 
-func handleAlter(db *dgraph2.DB) http.HandlerFunc {
+func handleAlter(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req alterReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -273,7 +273,7 @@ type setReq struct {
 	Value     any    `json:"value"`
 }
 
-func handleSet(db *dgraph2.DB) http.HandlerFunc {
+func handleSet(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req setReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -288,7 +288,7 @@ func handleSet(db *dgraph2.DB) http.HandlerFunc {
 	}
 }
 
-func handleGet(db *dgraph2.DB) http.HandlerFunc {
+func handleGet(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		uidStr := r.URL.Query().Get("uid")
 		pred := r.URL.Query().Get("pred")
@@ -302,7 +302,7 @@ func handleGet(db *dgraph2.DB) http.HandlerFunc {
 			return
 		}
 		val, err := db.Get(r.Context(), uid, pred)
-		if errors.Is(err, dgraph2.ErrNoValue) {
+		if errors.Is(err, bonsai.ErrNoValue) {
 			http.Error(w, "no value", http.StatusNotFound)
 			return
 		}
@@ -316,7 +316,7 @@ func handleGet(db *dgraph2.DB) http.HandlerFunc {
 
 // handleQuery accepts a DQL query as the request body and returns the JSON
 // response on the wire (so curl just sees the result, not a wrapper object).
-func handleQuery(db *dgraph2.DB) http.HandlerFunc {
+func handleQuery(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -334,7 +334,7 @@ func handleQuery(db *dgraph2.DB) http.HandlerFunc {
 }
 
 // handleMutate accepts an RDF SetNquads body (text/plain) and applies it.
-func handleMutate(db *dgraph2.DB) http.HandlerFunc {
+func handleMutate(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -368,7 +368,7 @@ func (m apiMutation) toApi() *apiproto.Mutation {
 	return &apiproto.Mutation{SetNquads: m.SetNquads, DelNquads: m.DelNquads}
 }
 
-// handleCommit and handleAbort are compatibility shims. dgraph2 commits
+// handleCommit and handleAbort are compatibility shims. bonsai commits
 // synchronously inside /mutate (no client-side txn state), so a follow-up
 // /commit is a no-op and /abort always reports success — there is no
 // pending state to roll back. Provided so dgo-style clients and proxies
@@ -399,7 +399,7 @@ func handleAbort() http.HandlerFunc {
 	}
 }
 
-func handleAssign(db *dgraph2.DB) http.HandlerFunc {
+func handleAssign(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nStr := r.URL.Query().Get("n")
 		if nStr == "" {
@@ -427,7 +427,7 @@ func handleAssign(db *dgraph2.DB) http.HandlerFunc {
 //
 // The manifest format produces a directory layout that upstream `dgraph
 // restore` can consume.
-func handleBackup(db *dgraph2.DB) http.HandlerFunc {
+func handleBackup(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dst := r.URL.Query().Get("path")
 		if dst == "" {
@@ -442,11 +442,11 @@ func handleBackup(db *dgraph2.DB) http.HandlerFunc {
 			}
 			_, _ = io.WriteString(w, `{"status":"ok","format":"stream"}`)
 		case "manifest":
-			t := dgraph2.BackupFull
+			t := bonsai.BackupFull
 			if r.URL.Query().Get("type") == "incremental" {
-				t = dgraph2.BackupIncremental
+				t = bonsai.BackupIncremental
 			}
-			man, err := db.BackupTo(r.Context(), dgraph2.BackupOptions{Dir: dst, Type: t})
+			man, err := db.BackupTo(r.Context(), bonsai.BackupOptions{Dir: dst, Type: t})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -470,7 +470,7 @@ func handleBackup(db *dgraph2.DB) http.HandlerFunc {
 //
 //	POST /admin/export?format=rdf|json&path=/tmp/export.rdf    write to a server-local path
 //	GET  /admin/export?format=rdf|json&download=true           stream the dump back in the response body
-func handleExport(db *dgraph2.DB) http.HandlerFunc {
+func handleExport(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		format := r.URL.Query().Get("format")
 		if format == "" {
@@ -486,7 +486,7 @@ func handleExport(db *dgraph2.DB) http.HandlerFunc {
 			}
 			w.Header().Set("Content-Type", ctype)
 			w.Header().Set("Content-Disposition",
-				fmt.Sprintf(`attachment; filename="dgraph2-export.%s"`, ext))
+				fmt.Sprintf(`attachment; filename="bonsai-export.%s"`, ext))
 			if err := db.ExportTo(r.Context(), format, w); err != nil {
 				// Headers are already sent; best effort error trailer.
 				_, _ = io.WriteString(w, "\n# export error: "+err.Error()+"\n")
@@ -507,12 +507,12 @@ func handleExport(db *dgraph2.DB) http.HandlerFunc {
 }
 
 // handleImport ingests RDF or JSON streamed in the POST body. Acts like
-// dgraph2-bulk but driven by an HTTP upload — useful for tooling and CI
+// bonsai-bulk but driven by an HTTP upload — useful for tooling and CI
 // pipelines that have an artifact rather than a server-local path.
 //
 //	POST /admin/import?format=rdf|json[&batch=1000]
 //	  body: contents of the .rdf / .json file (gzip not unwrapped here)
-func handleImport(db *dgraph2.DB) http.HandlerFunc {
+func handleImport(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -531,7 +531,7 @@ func handleImport(db *dgraph2.DB) http.HandlerFunc {
 			}
 			batch = n
 		}
-		summary, err := dgraph2.ImportStream(r.Context(), db, format, r.Body, batch)
+		summary, err := bonsai.ImportStream(r.Context(), db, format, r.Body, batch)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -541,15 +541,15 @@ func handleImport(db *dgraph2.DB) http.HandlerFunc {
 	}
 }
 
-// handleAdminState reports a small JSON state summary. dgraph2 has no
+// handleAdminState reports a small JSON state summary. bonsai has no
 // cluster, so the shape is minimal: namespaces, current ts, max uid.
-func handleAdminState(db *dgraph2.DB) http.HandlerFunc {
+func handleAdminState(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nss, _ := db.ListNamespaces(r.Context())
 		out := map[string]any{
 			"namespaces": nss,
 			"max_uid":    db.MaxUid(),
-			"version":    "dgraph2-0.1.0",
+			"version":    "bonsai-0.1.0",
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
@@ -559,7 +559,7 @@ func handleAdminState(db *dgraph2.DB) http.HandlerFunc {
 // handleAdminDraining toggles the drain flag.
 //   GET  /admin/draining        → {"draining": false}
 //   POST /admin/draining?on=1   → flips on
-func handleAdminDraining(db *dgraph2.DB, draining *atomic.Bool) http.HandlerFunc {
+func handleAdminDraining(db *bonsai.DB, draining *atomic.Bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			on := r.URL.Query().Get("on") == "1" ||
@@ -596,7 +596,7 @@ func handleAdminShutdown(stop chan<- os.Signal) http.HandlerFunc {
 }
 
 // handleAdminNamespace: GET → list, POST?ns=N → create, DELETE?ns=N → drop.
-func handleAdminNamespace(db *dgraph2.DB) http.HandlerFunc {
+func handleAdminNamespace(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -637,7 +637,7 @@ func handleAdminNamespace(db *dgraph2.DB) http.HandlerFunc {
 
 // handleAdminSchema GETs dump the active schema in DQL form. POSTs reuse the
 // existing Alter handler.
-func handleAdminSchema(db *dgraph2.DB) http.HandlerFunc {
+func handleAdminSchema(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -663,7 +663,7 @@ func handleAdminSchema(db *dgraph2.DB) http.HandlerFunc {
 //     (RestoreFrom).
 //
 //	POST /admin/restore?path=<path>
-func handleRestore(db *dgraph2.DB) http.HandlerFunc {
+func handleRestore(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		src := r.URL.Query().Get("path")
 		if src == "" {

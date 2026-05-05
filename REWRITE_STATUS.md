@@ -1,6 +1,6 @@
-# dgraph2 — Working Lightweight Graph Database
+# Bonsai — Working Lightweight Graph Database
 
-`dgraph2` is a single-node, embeddable fork of upstream Dgraph
+`bonsai` is a single-node, embeddable fork of upstream Dgraph
 (`priorart/dgraph/`, gitignored) with the cluster machinery (Zero, Raft,
 inter-alpha gRPC, group sharding, distributed Oracle, ACL, multi-tenancy,
 at-rest encryption, Vault) removed. The DQL parser, posting store, schema,
@@ -10,11 +10,11 @@ indexing and worker query-execution engine are all preserved.
 
 ```
 $ make all
-go vet ./pkg/dgraph2/... ./cmd/dgraph2-server/... ./worker/...
-go build  ./cmd/dgraph2-server
-go test  -count=1 ./pkg/dgraph2/... ./cmd/dgraph2-server/...
-ok    github.com/qiangli/dgraph2/pkg/dgraph2          2.570s
-ok    github.com/qiangli/dgraph2/cmd/dgraph2-server   0.765s
+go vet ./pkg/bonsai/... ./cmd/bonsai-server/... ./worker/...
+go build  ./cmd/bonsai-server
+go test  -count=1 ./pkg/bonsai/... ./cmd/bonsai-server/...
+ok    github.com/qiangli/bonsai/pkg/bonsai          2.570s
+ok    github.com/qiangli/bonsai/cmd/bonsai-server   0.765s
 ```
 
 `go build ./...` is clean across the whole tree.
@@ -22,7 +22,7 @@ ok    github.com/qiangli/dgraph2/cmd/dgraph2-server   0.765s
 ### End-to-end capabilities
 
 The following all work, demonstrated by e2e tests in
-`pkg/dgraph2/db_test.go` and `cmd/dgraph2-server/e2e_test.go`:
+`pkg/bonsai/db_test.go` and `cmd/bonsai-server/e2e_test.go`:
 
 | Feature                        | Test                          | Detail                                        |
 |-------------------------------|------------------------------|----------------------------------------------|
@@ -47,8 +47,8 @@ The following all work, demonstrated by e2e tests in
 ```
 .
 ├── Makefile                     # build / test / vet / all / clean
-├── cmd/dgraph2-server/          # HTTP server: /query /mutate /alter /admin/backup
-├── pkg/dgraph2/                 # Go API: Open Close Alter Mutate Query Set Get Backup RestoreFrom
+├── cmd/bonsai-server/          # HTTP server: /query /mutate /alter /admin/backup
+├── pkg/bonsai/                 # Go API: Open Close Alter Mutate Query Set Get Backup RestoreFrom
 ├── worker/                      # ported from priorart, cluster paths stripped:
 │                                #   mutation.go (runMutation, MutateOverNetwork)
 │                                #   task.go     (processTask, ProcessTaskOverNetwork)
@@ -65,8 +65,8 @@ The following all work, demonstrated by e2e tests in
 
 * **#5/#6 Persistent counters**: timestamps resume from
   `pstore.MaxVersion()`, UID counter resumes from a reserved
-  `__dgraph2_max_uid` Badger key. Single atomic `worker.localTs` is the
-  process-wide source of truth; both `pkg/dgraph2.DB.tsCount` and
+  `__bonsai_max_uid` Badger key. Single atomic `worker.localTs` is the
+  process-wide source of truth; both `pkg/bonsai.DB.tsCount` and
   `worker.NextTs` advance it. Calling `posting.Oracle.ProcessDelta`
   concurrently triggers an `AssertTrue` panic, so we never call it from
   multiple paths.
@@ -80,15 +80,15 @@ The following all work, demonstrated by e2e tests in
   `grpcWorker.ServeTask`) excised. The local executor that powers
   `eq`/`ge`/`le`/`has`/`uid`/sort/count/regex is kept verbatim.
 * **#3 `SortOverNetwork`**: trivial wrapper over `processSort`.
-* **#4 RDF Mutate**: `pkg/dgraph2.DB.Mutate` parses
+* **#4 RDF Mutate**: `pkg/bonsai.DB.Mutate` parses
   SetNquads/DelNquads via `chunker.ParseRDFs`, substitutes blank nodes
   with fresh UIDs, tags Set/Del, routes through `MutateOverNetwork`.
 
 ### Tier 2 — done
 
-* **#7 DQL Query**: `pkg/dgraph2.DB.Query` parses through `dql.Parse`,
+* **#7 DQL Query**: `pkg/bonsai.DB.Query` parses through `dql.Parse`,
   builds `query.Request`, runs `ProcessQuery`, marshals via
-  `query.ToJson`. `cmd/dgraph2-server` exposes `/query` and `/mutate`.
+  `query.ToJson`. `cmd/bonsai-server` exposes `/query` and `/mutate`.
 * **#8 HTTP** (gRPC was originally planned via `api.DgraphServer`; the
   HTTP surface is the actual interface for now — the same gRPC types are
   reused on the wire so dgo clients can be wired later trivially).
@@ -125,7 +125,7 @@ If you keep going, in rough priority:
    `xidmap` for `worker.AssignUidsOverNetwork`. Lets users ingest
    multi-GB RDF dumps without the streaming Mutate path.
 2. **gRPC `api.DgraphServer`** — register the auto-generated server in
-   `cmd/dgraph2-server`. Existing dgo clients connect unchanged.
+   `cmd/bonsai-server`. Existing dgo clients connect unchanged.
 3. **GraphQL** — restore the trimmed `graphql/` tree (admin endpoints
    without ACL/namespace SDL fragments). Largest remaining piece of
    upstream code that's currently absent.

@@ -22,12 +22,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/dgraphapi"
-	"github.com/qiangli/dgraph2/dgraphtest"
-	"github.com/qiangli/dgraph2/testutil"
-	"github.com/qiangli/dgraph2/tok"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/dgraphapi"
+	"github.com/qiangli/bonsai/dgraphtest"
+	"github.com/qiangli/bonsai/testutil"
+	"github.com/qiangli/bonsai/tok"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 var (

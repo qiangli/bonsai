@@ -33,9 +33,9 @@ import (
 
 	"github.com/golang/glog"
 
-	"github.com/qiangli/dgraph2/codec"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/codec"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/x"
 )
 
 // So, with SIMD instructions before, we were getting great performance, but at the cost of

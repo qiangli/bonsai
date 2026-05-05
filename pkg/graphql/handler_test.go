@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -13,13 +13,13 @@ import (
 
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
-	"github.com/qiangli/dgraph2/pkg/graphql"
+	"github.com/qiangli/bonsai/pkg/bonsai"
+	"github.com/qiangli/bonsai/pkg/graphql"
 )
 
-func newDB(t *testing.T) *dgraph2.DB {
+func newDB(t *testing.T) *bonsai.DB {
 	t.Helper()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: t.TempDir()})
+	db, err := bonsai.Open(bonsai.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * Single-node minimal worker package.
@@ -7,7 +7,7 @@
  * Upstream Dgraph's `worker` package was the home of the cluster machinery:
  * Raft, group routing, predicate-move choreography, the inter-alpha gRPC
  * services, the distributed Oracle, and the local query/mutation execution
- * engine all lived together. In dgraph2 the cluster pieces are gone, so
+ * engine all lived together. In bonsai the cluster pieces are gone, so
  * `worker` shrinks to a thin façade that:
  *
  *   - holds the Badger handle (`pstore`)
@@ -19,8 +19,8 @@
  *     `ErrNonExistentTabletMessage`)
  *
  * The "OverNetwork" mutation/query/sort entry points currently return
- * ErrNotImplemented — they compile but do not yet execute. The dgraph2 demo
- * library (pkg/dgraph2) drives Badger and posting directly for now.
+ * ErrNotImplemented — they compile but do not yet execute. The bonsai demo
+ * library (pkg/bonsai) drives Badger and posting directly for now.
  */
 package worker
 
@@ -31,8 +31,8 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
 )
 
 // pstore is the Badger handle shared with the posting package.
@@ -44,7 +44,7 @@ var maxUID uint64
 
 // ErrNotImplemented is the placeholder error returned by query/mutation entry
 // points that have not yet been ported to the single-node engine.
-var ErrNotImplemented = errors.New("dgraph2: query/mutation engine not yet wired up (P1 work-in-progress)")
+var ErrNotImplemented = errors.New("bonsai: query/mutation engine not yet wired up (P1 work-in-progress)")
 
 // ErrNonExistentTabletMessage matches upstream's error string so that callers
 // in `query/query.go` that string-compare against it still work.
@@ -55,13 +55,13 @@ const ErrNonExistentTabletMessage = "Requested predicate is not being served by 
 const MaxLeaseUid = uint64(1) << 62
 
 // LimitDefaults mirrors upstream's `--limit` superflag string. Some flags
-// (e.g. `mutations`) are read by code paths that survive in dgraph2.
+// (e.g. `mutations`) are read by code paths that survive in bonsai.
 const LimitDefaults = `mutations=allow; query-edge=1000000; normalize-node=10000; ` +
 	`mutations-nquad=1000000; disallow-drop=false; query-timeout=0ms; txn-abort-after=5m; ` +
 	`max-retries=10; max-pending-queries=10000; shared-instance=false; type-filter-uid-limit=10`
 
 // Options is the runtime configuration for the worker subsystem. ACL,
-// encryption, vault, and CDC fields are gone — dgraph2 is local-only.
+// encryption, vault, and CDC fields are gone — bonsai is local-only.
 type Options struct {
 	PostingDir         string
 	WALDir             string
@@ -76,7 +76,7 @@ type Options struct {
 var Config Options
 
 // Init wires the Badger handle into the worker package. Called by
-// pkg/dgraph2.Open.
+// pkg/bonsai.Open.
 func Init(ps *badger.DB) {
 	pstore = ps
 }
@@ -84,11 +84,11 @@ func Init(ps *badger.DB) {
 // Pstore returns the Badger handle. Used by posting/.
 func Pstore() *badger.DB { return pstore }
 
-// StartRaftNodes is a no-op in dgraph2; cluster bootstrap is gone.
+// StartRaftNodes is a no-op in bonsai; cluster bootstrap is gone.
 // Retained as a symbol because tests under query/ still call it.
 func StartRaftNodes(_ string) { /* no-op */ }
 
-// BlockingStop tears down worker state. Called by pkg/dgraph2.Close.
+// BlockingStop tears down worker state. Called by pkg/bonsai.Close.
 func BlockingStop() { /* nothing to drain — no Raft, no goroutines yet */ }
 
 // MaxLeaseId returns the highest UID currently assigned.

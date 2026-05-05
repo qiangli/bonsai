@@ -8,8 +8,8 @@ package index
 import (
 	"context"
 
-	c "github.com/qiangli/dgraph2/tok/constraints"
-	opts "github.com/qiangli/dgraph2/tok/options"
+	c "github.com/qiangli/bonsai/tok/constraints"
+	opts "github.com/qiangli/bonsai/tok/options"
 )
 
 // IndexFactory is responsible for being able to create, find, and remove

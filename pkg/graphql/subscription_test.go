@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -18,7 +18,7 @@ import (
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 	"github.com/gorilla/websocket"
 
-	"github.com/qiangli/dgraph2/pkg/graphql"
+	"github.com/qiangli/bonsai/pkg/graphql"
 )
 
 // TestSubscriptionLifecycle wires a real HTTP server to

@@ -1,13 +1,13 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Streaming ingest helper. Same chunker pipeline that dgraph2-bulk uses,
+ * Streaming ingest helper. Same chunker pipeline that bonsai-bulk uses,
  * exposed as a library function so HTTP /admin/import and CLI tools can
  * share it without code duplication.
  */
 
-package dgraph2
+package bonsai
 
 import (
 	"bufio"
@@ -20,7 +20,7 @@ import (
 
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/chunker"
+	"github.com/qiangli/bonsai/chunker"
 )
 
 // ImportSummary is the JSON shape returned from ImportStream / /admin/import.

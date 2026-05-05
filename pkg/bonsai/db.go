@@ -1,9 +1,9 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Package dgraph2 is the embeddable Go API for dgraph2, a lightweight,
+// Package bonsai is the embeddable Go API for bonsai, a lightweight,
 // local-only fork of upstream Dgraph that drops cluster machinery (Zero, Raft,
 // inter-alpha gRPC, group sharding, distributed Oracle, ACL, multi-tenancy,
 // at-rest encryption) while keeping the DQL parser, posting-store, schema and
@@ -17,7 +17,7 @@
 // Set/Get/Schema APIs use the posting + schema packages directly. A higher-
 // level Query/Mutate that runs DQL over the posting store will land once
 // worker/task.go is back from priorart.
-package dgraph2
+package bonsai
 
 import (
 	"context"
@@ -40,17 +40,17 @@ import (
 	"github.com/dgraph-io/ristretto/v2/z"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/qiangli/dgraph2/chunker"
-	"github.com/qiangli/dgraph2/dql"
-	"github.com/qiangli/dgraph2/pkg/audit"
-	"github.com/qiangli/dgraph2/posting"
-	"github.com/qiangli/dgraph2/query"
-	"github.com/qiangli/dgraph2/schema"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/worker"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/chunker"
+	"github.com/qiangli/bonsai/dql"
+	"github.com/qiangli/bonsai/pkg/audit"
+	"github.com/qiangli/bonsai/posting"
+	"github.com/qiangli/bonsai/query"
+	"github.com/qiangli/bonsai/schema"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/worker"
+	"github.com/qiangli/bonsai/x"
 
-	"github.com/qiangli/dgraph2/protos/pb"
+	"github.com/qiangli/bonsai/protos/pb"
 )
 
 // Options is the configuration for opening a DB.
@@ -59,7 +59,7 @@ type Options struct {
 	Dir string
 	// CacheMB is the posting cache size. Defaults to 256MB.
 	CacheMB int64
-	// EncryptionKey is reserved; dgraph2 currently runs unencrypted.
+	// EncryptionKey is reserved; bonsai currently runs unencrypted.
 	EncryptionKey []byte
 	// AuditLog, if non-nil, receives one entry per administrative or write
 	// operation (Mutate, Alter, Drop*, namespace, backup, restore). A nil
@@ -67,7 +67,7 @@ type Options struct {
 	AuditLog *audit.Logger
 }
 
-// DB is an open dgraph2 database.
+// DB is an open bonsai database.
 type DB struct {
 	mu      sync.Mutex
 	closed  atomic.Bool
@@ -87,13 +87,13 @@ type DB struct {
 // underlying state may have changed.
 func (d *DB) MutationTick() uint64 { return d.mutationTick.Load() }
 
-// Open opens (or creates) a dgraph2 database at the given directory.
+// Open opens (or creates) a bonsai database at the given directory.
 //
 // On first open, the on-disk Badger is initialised, the worker layer is wired
-// to it, and dgraph2's reserved schema is applied at timestamp 1.
+// to it, and bonsai's reserved schema is applied at timestamp 1.
 func Open(opts Options) (*DB, error) {
 	if opts.Dir == "" {
-		return nil, errors.New("dgraph2.Open: Options.Dir is required")
+		return nil, errors.New("bonsai.Open: Options.Dir is required")
 	}
 	if opts.CacheMB <= 0 {
 		opts.CacheMB = 256
@@ -101,13 +101,13 @@ func Open(opts Options) (*DB, error) {
 
 	pdir := filepath.Join(opts.Dir, "p")
 	if err := os.MkdirAll(pdir, 0o755); err != nil {
-		return nil, fmt.Errorf("dgraph2.Open: cannot create dir %s: %w", pdir, err)
+		return nil, fmt.Errorf("bonsai.Open: cannot create dir %s: %w", pdir, err)
 	}
 
 	bopts := badger.DefaultOptions(pdir).
 		WithLogger(&x.ToGlog{}).
 		WithSyncWrites(false)
-	// Conflict detection is on. dgraph2 serialises all mutations behind a
+	// Conflict detection is on. bonsai serialises all mutations behind a
 	// process-wide lock in worker/mutation.go and assigns monotonic
 	// timestamps from worker.localTs, so in practice no conflicts can fire,
 	// but Badger now tracks the read/write sets and will surface a
@@ -116,7 +116,7 @@ func Open(opts Options) (*DB, error) {
 
 	ps, err := badger.OpenManaged(bopts)
 	if err != nil {
-		return nil, fmt.Errorf("dgraph2.Open: badger open failed: %w", err)
+		return nil, fmt.Errorf("bonsai.Open: badger open failed: %w", err)
 	}
 
 	// IndexRebuild uses os.MkdirTemp(x.WorkerConfig.TmpDir, ...) with TmpDir
@@ -149,7 +149,7 @@ func Open(opts Options) (*DB, error) {
 	schema.Init(ps)
 	if err := schema.LoadFromDb(context.Background()); err != nil {
 		_ = ps.Close()
-		return nil, fmt.Errorf("dgraph2.Open: schema load failed: %w", err)
+		return nil, fmt.Errorf("bonsai.Open: schema load failed: %w", err)
 	}
 
 	db := &DB{opts: opts, pstore: ps}
@@ -169,7 +169,7 @@ func Open(opts Options) (*DB, error) {
 		worker.SetMaxUID(uid)
 	} else if !errors.Is(err, badger.ErrKeyNotFound) {
 		_ = ps.Close()
-		return nil, fmt.Errorf("dgraph2.Open: read uid counter: %w", err)
+		return nil, fmt.Errorf("bonsai.Open: read uid counter: %w", err)
 	}
 
 	// Tell the posting Oracle about the timestamp high-water so reads at
@@ -184,9 +184,9 @@ func Open(opts Options) (*DB, error) {
 }
 
 // uidCounterKey is the reserved Badger key holding the highest assigned UID.
-// dgraph2-specific; never clashes with x.DataKey/IndexKey/etc. because those
+// bonsai-specific; never clashes with x.DataKey/IndexKey/etc. because those
 // always start with byte prefixes 0x00..0x0c.
-var uidCounterKey = []byte("__dgraph2_max_uid")
+var uidCounterKey = []byte("__bonsai_max_uid")
 
 func readUidCounter(ps *badger.DB) (uint64, error) {
 	txn := ps.NewTransactionAt(ps.MaxVersion(), false)
@@ -264,7 +264,7 @@ func (d *DB) Close() error {
 }
 
 // nextTs returns a fresh, locally-monotonic timestamp. Backed by
-// worker.NextTs so the worker.MutateOverNetwork path and pkg/dgraph2's
+// worker.NextTs so the worker.MutateOverNetwork path and pkg/bonsai's
 // direct Set path share a single, monotonically increasing counter. Reads
 // in Get/Query that take readTs from this counter will always see prior
 // commits without blocking in Oracle.WaitForTs.
@@ -585,8 +585,8 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (resp *api.Response, e
 			nquads = append(nquads, taggedNQ{q: q, delete: true})
 		}
 	}
-	// Already-parsed NQuads via m.Set / m.Del (used by dgraph2-bulk and
-	// dgraph2-live, which chunk RDF/JSON in the loader and hand the parsed
+	// Already-parsed NQuads via m.Set / m.Del (used by bonsai-bulk and
+	// bonsai-live, which chunk RDF/JSON in the loader and hand the parsed
 	// triples straight to Mutate).
 	for _, q := range m.Set {
 		nquads = append(nquads, taggedNQ{q: q, delete: false})
@@ -671,7 +671,7 @@ func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
 // Format: "rdf" emits N-Quads, one triple per line. "json" emits a JSON
 // array of {subject, predicate, value} records.
 //
-// dgraph2 export is a single-file dump (no group iteration / chunking
+// bonsai export is a single-file dump (no group iteration / chunking
 // like upstream); fine for the embedded-DB use case.
 func (d *DB) Export(ctx context.Context, format, dst string) error {
 	f, err := os.Create(dst)
@@ -849,7 +849,7 @@ func (d *DB) DropNamespace(ctx context.Context, ns uint64) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	prefix := x.NamespaceToBytes(ns)
-	// Every binary key in dgraph2 starts with: [prefix-byte][8 ns bytes][...].
+	// Every binary key in bonsai starts with: [prefix-byte][8 ns bytes][...].
 	// We have to drop each prefix-class separately.
 	for _, kind := range []byte{x.ByteData, x.ByteIndex, x.ByteReverse, x.ByteCount, x.ByteCountRev, x.ByteSchema, x.ByteType} {
 		keyPrefix := append([]byte{kind}, prefix...)
@@ -894,7 +894,7 @@ func (d *DB) ListNamespaces(ctx context.Context) ([]uint64, error) {
 	return d.listNamespacesLocked()
 }
 
-var namespaceRegistryKey = []byte("__dgraph2_namespaces")
+var namespaceRegistryKey = []byte("__bonsai_namespaces")
 
 func (d *DB) listNamespacesLocked() ([]uint64, error) {
 	txn := d.pstore.NewTransactionAt(d.pstore.MaxVersion(), false)
@@ -1218,7 +1218,7 @@ var ErrNoValue = posting.ErrNoValue
 // resulting file can later be passed to RestoreFrom to seed a new DB.
 //
 // In upstream Dgraph the backup path coordinated across groups, encrypted
-// per-tablet, and produced multi-file manifests; in dgraph2 the database is
+// per-tablet, and produced multi-file manifests; in bonsai the database is
 // a single embedded Badger, so backup is a single Stream snapshot at the
 // current timestamp.
 //

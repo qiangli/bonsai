@@ -6,10 +6,10 @@ reference
 /build
 /installs
 /coverage.out
-/dgraph2-server
-/dgraph2-cli
-/dgraph2-bulk
-/dgraph2-live
+/bonsai-server
+/bonsai-cli
+/bonsai-bulk
+/bonsai-live
 /dgraph
 
 # IDE
@@ -34,3 +34,10 @@ reference
 # Misc
 vendor
 .minio.sys
+# Stale binaries from the dgraph2 → bonsai rename. Listed so an accidental
+# `go build ./cmd/dgraph2-server` (e.g. from old shell history) doesn't get
+# committed.
+/dgraph2-server
+/dgraph2-cli
+/dgraph2-bulk
+/dgraph2-live

@@ -11,9 +11,9 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 var (

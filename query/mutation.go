@@ -16,11 +16,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/dql"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/types/facets"
-	"github.com/qiangli/dgraph2/worker"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/dql"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/types/facets"
+	"github.com/qiangli/bonsai/worker"
+	"github.com/qiangli/bonsai/x"
 )
 
 // ApplyMutations performs the required edge expansions and forwards the results to the

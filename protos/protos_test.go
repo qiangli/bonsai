@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/qiangli/dgraph2/testutil"
+	"github.com/qiangli/bonsai/testutil"
 )
 
 func TestProtosRegenerate(t *testing.T) {

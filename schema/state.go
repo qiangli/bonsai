@@ -6,7 +6,7 @@
 package schema
 
 import (
-	"github.com/qiangli/dgraph2/lex"
+	"github.com/qiangli/bonsai/lex"
 )
 
 // Constants representing type of different graphql lexed items.

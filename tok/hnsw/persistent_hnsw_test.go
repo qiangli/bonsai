@@ -11,9 +11,9 @@ import (
 	"sync"
 	"testing"
 
-	c "github.com/qiangli/dgraph2/tok/constraints"
-	"github.com/qiangli/dgraph2/tok/index"
-	opt "github.com/qiangli/dgraph2/tok/options"
+	c "github.com/qiangli/bonsai/tok/constraints"
+	"github.com/qiangli/bonsai/tok/index"
+	opt "github.com/qiangli/bonsai/tok/options"
 	"golang.org/x/exp/slices"
 )
 

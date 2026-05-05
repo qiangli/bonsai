@@ -22,14 +22,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/dql"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/types/facets"
-	"github.com/qiangli/dgraph2/worker"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/dql"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/types/facets"
+	"github.com/qiangli/bonsai/worker"
+	"github.com/qiangli/bonsai/x"
 )
 
 /*

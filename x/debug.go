@@ -18,7 +18,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	bpb "github.com/dgraph-io/badger/v4/pb"
-	"github.com/qiangli/dgraph2/protos/pb"
+	"github.com/qiangli/bonsai/protos/pb"
 )
 
 func PrintRollup(plist *pb.PostingList, parts map[uint64]*pb.PostingList, baseKey []byte, ts uint64) {

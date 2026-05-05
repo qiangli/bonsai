@@ -13,11 +13,11 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/types/facets"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/types/facets"
+	"github.com/qiangli/bonsai/x"
 )
 
 type pathInfo struct {

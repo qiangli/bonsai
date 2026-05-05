@@ -5,7 +5,7 @@
 
 package types
 
-import "github.com/qiangli/dgraph2/x"
+import "github.com/qiangli/bonsai/x"
 
 // CompareVals compares two values using the given comparison type.
 // Should be used only in filtering arg1 by comparing with arg2.

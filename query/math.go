@@ -11,7 +11,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 
-	"github.com/qiangli/dgraph2/types"
+	"github.com/qiangli/bonsai/types"
 )
 
 type mathTree struct {

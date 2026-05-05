@@ -1,8 +1,8 @@
-# dgraph2 — lightweight, local-only fork of upstream Dgraph.
+# Bonsai — lightweight, local-only fork of upstream Dgraph.
 #
 # Targets:
-#   make build  — compile pkg/dgraph2 + cmd/dgraph2-server
-#   make test   — run unit + e2e tests for pkg/dgraph2 and cmd/dgraph2-server
+#   make build  — compile pkg/bonsai + cmd/bonsai-server
+#   make test   — run unit + e2e tests for pkg/bonsai and cmd/bonsai-server
 #   make all    — build + test
 #   make clean  — remove the built binary
 
@@ -11,25 +11,25 @@ GOFLAGS  ?=
 # or via the VERSION env var. Falls back to `git describe` if available, else "dev".
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
-PKGS     := ./pkg/dgraph2/... ./cmd/dgraph2-server/... ./worker/... ./schema/... ./posting/... ./query/... ./dql/... ./types/... ./tok/... ./algo/... ./codec/... ./lex/... ./x/...
+PKGS     := ./pkg/bonsai/... ./cmd/bonsai-server/... ./worker/... ./schema/... ./posting/... ./query/... ./dql/... ./types/... ./tok/... ./algo/... ./codec/... ./lex/... ./x/...
 
 .PHONY: build test all clean vet
 
 build:
-	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" ./cmd/dgraph2-server ./cmd/dgraph2-cli
+	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" ./cmd/bonsai-server ./cmd/bonsai-cli
 
 test:
-	go test $(GOFLAGS) -count=1 ./pkg/dgraph2/... ./pkg/graphql/... ./pkg/audit/... ./pkg/ui/... ./cmd/dgraph2-server/...
+	go test $(GOFLAGS) -count=1 ./pkg/bonsai/... ./pkg/graphql/... ./pkg/audit/... ./pkg/ui/... ./cmd/bonsai-server/...
 
 # go vet on the whole tree flags many pre-existing `copylocks` warnings in
 # upstream code (the proto-generated types embed sync.Mutex via MessageState
 # in google.golang.org/protobuf/runtime). Those are inherited from priorart
-# and unrelated to the dgraph2 rewrite. The vet target below only checks
-# packages dgraph2 wrote or substantially rewrote.
+# and unrelated to the bonsai rewrite. The vet target below only checks
+# packages bonsai wrote or substantially rewrote.
 vet:
-	go vet ./pkg/dgraph2/... ./cmd/dgraph2-server/... ./worker/...
+	go vet ./pkg/bonsai/... ./cmd/bonsai-server/... ./worker/...
 
 all: vet build test
 
 clean:
-	rm -f dgraph2-server
+	rm -f bonsai-server

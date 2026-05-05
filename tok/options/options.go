@@ -8,7 +8,7 @@ package options
 import (
 	"fmt"
 
-	c "github.com/qiangli/dgraph2/tok/constraints"
+	c "github.com/qiangli/bonsai/tok/constraints"
 )
 
 // An Options instance maps the various named options to their specific values.

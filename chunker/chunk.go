@@ -19,8 +19,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/qiangli/dgraph2/lex"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/lex"
+	"github.com/qiangli/bonsai/x"
 )
 
 // Chunker describes the interface to parse and process the input to the live and bulk loaders.

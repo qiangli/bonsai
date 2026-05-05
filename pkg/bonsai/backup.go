@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * Multi-file backup format compatible with upstream Dgraph's `dgraph restore`.
@@ -17,7 +17,7 @@
  * the single-node fork keeps EncryptionKey reserved.
  */
 
-package dgraph2
+package bonsai
 
 import (
 	"context"
@@ -39,10 +39,10 @@ import (
 	"github.com/klauspost/compress/s2"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/qiangli/dgraph2/posting"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
-	"github.com/qiangli/dgraph2/worker"
+	"github.com/qiangli/bonsai/posting"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
+	"github.com/qiangli/bonsai/worker"
 )
 
 // manifestVersion matches upstream's x.ManifestVersion. Upstream readers
@@ -71,7 +71,7 @@ type BackupOptions struct {
 // Manifest is the per-backup manifest written into manifest.json. Field
 // names and JSON tags are wire-compatible with upstream's
 // worker.ManifestBase + worker.Manifest, minus encryption + drop-ops which
-// dgraph2 does not produce.
+// bonsai does not produce.
 type Manifest struct {
 	Type        string              `json:"type"`
 	SinceTs     uint64              `json:"since"`
@@ -83,7 +83,7 @@ type Manifest struct {
 	Encrypted   bool                `json:"encrypted"`
 	Compression string              `json:"compression"`
 	Groups      map[uint32][]string `json:"groups"`
-	// DropOperations is always empty for dgraph2 (cluster-only field).
+	// DropOperations is always empty for bonsai (cluster-only field).
 	DropOperations []any `json:"drop_operations"`
 }
 
@@ -199,7 +199,7 @@ func (d *DB) writeBackupFile(ctx context.Context, path string, readTs, sinceTs u
 	}()
 
 	stream := d.pstore.NewStreamAt(readTs)
-	stream.LogPrefix = "dgraph2.BackupTo"
+	stream.LogPrefix = "bonsai.BackupTo"
 	stream.SinceTs = sinceTs
 	stream.Send = func(buf *z.Buffer) error {
 		list, lerr := badger.BufferToKVList(buf)
@@ -285,7 +285,7 @@ func schemaPredicates() []string {
 }
 
 // splitNamespacedAttr strips the 8-byte namespace prefix from a predicate
-// name. dgraph2 keeps predicates internally as `<8-byte-ns><attr>`. For the
+// name. bonsai keeps predicates internally as `<8-byte-ns><attr>`. For the
 // manifest we want the bare attr.
 func splitNamespacedAttr(p string) (ns []byte, attr string) {
 	if len(p) < 8 {
@@ -366,7 +366,7 @@ func (d *DB) applyBackupFile(_ context.Context, root string, m *Manifest) (uint6
 	defer func() { _ = f.Close() }()
 
 	// Compression field on the per-backup manifest may be empty (older
-	// upstream backups), "snappy", or "gzip". dgraph2 only produces snappy.
+	// upstream backups), "snappy", or "gzip". bonsai only produces snappy.
 	var r io.Reader = f
 	switch m.Compression {
 	case "", "snappy":

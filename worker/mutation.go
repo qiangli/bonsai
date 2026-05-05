@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * Local mutation apply path. Replaces upstream's RaftProposal-based
@@ -21,15 +21,15 @@ import (
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/posting"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/posting"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 // errNonExistentTablet / errUnservedTablet match the upstream errors so call
-// sites in task.go that compare them work unchanged. In dgraph2 every
+// sites in task.go that compare them work unchanged. In bonsai every
 // predicate lives on the local "tablet" so these are only thrown on truly
 // missing predicates.
 var (
@@ -38,7 +38,7 @@ var (
 )
 
 // mutationMu serialises mutation transactions. Upstream relied on Raft order;
-// dgraph2 uses a process-wide lock. Reads still proceed in parallel because
+// bonsai uses a process-wide lock. Reads still proceed in parallel because
 // they don't take this lock.
 var mutationMu = newMutationLock()
 
@@ -81,7 +81,7 @@ func runMutation(ctx context.Context, edge *pb.DirectedEdge, txn *posting.Txn) e
 	}
 
 	if isDeletePredicateEdge(edge) {
-		return errors.New("delete-predicate is not supported in dgraph2 yet")
+		return errors.New("delete-predicate is not supported in bonsai yet")
 	}
 
 	if err := ValidateAndConvert(edge, &su); err != nil {
@@ -102,9 +102,9 @@ func runMutation(ctx context.Context, edge *pb.DirectedEdge, txn *posting.Txn) e
 }
 
 // ValidateAndConvert is a near-verbatim port of the upstream helper. The only
-// behavioural changes: vector-keyword check uses the dgraph2 hnsw constant
+// behavioural changes: vector-keyword check uses the bonsai hnsw constant
 // reference (same value); the ACL `dgraph.rule.permission` branch is dropped
-// because dgraph2 has no ACL.
+// because bonsai has no ACL.
 func ValidateAndConvert(edge *pb.DirectedEdge, su *pb.SchemaUpdate) error {
 	if isDeletePredicateEdge(edge) {
 		return nil
@@ -220,7 +220,7 @@ func MutateOverNetwork(ctx context.Context, m *pb.Mutations) (*api.TxnContext, e
 }
 
 // updateSchemaLocal persists a schema update to both the in-memory schema
-// state and Badger. dgraph2 doesn't have the upstream Raft proposal, so the
+// state and Badger. bonsai doesn't have the upstream Raft proposal, so the
 // caller is expected to be running under mutationMu.
 func updateSchemaLocal(su *pb.SchemaUpdate, ts uint64) error {
 	schema.State().Set(su.Predicate, su)
@@ -236,7 +236,7 @@ func updateSchemaLocal(su *pb.SchemaUpdate, ts uint64) error {
 }
 
 // ApplyInitialSchema persists the reserved (`dgraph.*`) schema and type
-// definitions for the given namespace. Called by pkg/dgraph2.Open for
+// definitions for the given namespace. Called by pkg/bonsai.Open for
 // the root namespace and by CreateNamespace for new tenants.
 func ApplyInitialSchema(ns, ts uint64) error {
 	for _, su := range schema.InitialSchema(ns) {
@@ -269,7 +269,7 @@ func updateTypeLocal(tu *pb.TypeUpdate, ts uint64) error {
 }
 
 // localTs is the single source of truth for transaction timestamps in
-// dgraph2. We never call posting.Oracle().ProcessDelta concurrently — the
+// bonsai. We never call posting.Oracle().ProcessDelta concurrently — the
 // Oracle uses a CompareAndSwap on its maxAssigned counter and asserts on
 // failure, so racing ProcessDelta calls panic. We advance the Oracle
 // serially, only after CommitToDisk completes.
@@ -278,14 +278,14 @@ var localTs uint64
 // nextLocalTs returns a fresh timestamp. Both startTs and commitTs allocate
 // from this counter, ensuring commitTs > startTs naturally.
 //
-// At Open time, pkg/dgraph2 seeds localTs from pstore.MaxVersion+1; from
+// At Open time, pkg/bonsai seeds localTs from pstore.MaxVersion+1; from
 // then on, mutationMu serialises increments so concurrent mutations don't
 // reuse a timestamp.
 func nextLocalTs() uint64 {
 	return atomic.AddUint64(&localTs, 1)
 }
 
-// NextTs is the public version of nextLocalTs, exposed so pkg/dgraph2 can
+// NextTs is the public version of nextLocalTs, exposed so pkg/bonsai can
 // share the same atomic counter for its non-Mutate write paths
 // (DB.Set, DB.Alter, DB.AssignUid persistence). Keeping a single counter
 // avoids the dual-counter bug where reads at d.tsCount blocked forever in
@@ -299,7 +299,7 @@ func CurrentTs() uint64 {
 	return atomic.LoadUint64(&localTs)
 }
 
-// SeedLocalTs is called by pkg/dgraph2.Open to seed the local timestamp
+// SeedLocalTs is called by pkg/bonsai.Open to seed the local timestamp
 // counter from the recovered Badger MaxVersion. Must be called before any
 // mutation is processed.
 func SeedLocalTs(ts uint64) {

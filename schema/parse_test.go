@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 type nameType struct {

@@ -19,13 +19,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/posting"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
-	"github.com/qiangli/dgraph2/tok"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/posting"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
+	"github.com/qiangli/bonsai/tok"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 var emptySortResult pb.SortResult
@@ -43,7 +43,7 @@ type sortresult struct {
 	err              error
 }
 
-// SortOverNetwork sorts a UID matrix locally. dgraph2 has no remote groups,
+// SortOverNetwork sorts a UID matrix locally. bonsai has no remote groups,
 // so this is a thin wrapper around processSort.
 func SortOverNetwork(ctx context.Context, q *pb.SortMessage) (*pb.SortResult, error) {
 	if span := trace.SpanFromContext(ctx); span != nil {

@@ -11,7 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/protos/pb"
+	"github.com/qiangli/bonsai/protos/pb"
 )
 
 const sizeOfBucket = 144

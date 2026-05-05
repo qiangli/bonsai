@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -7,7 +7,7 @@ package x
 
 import "context"
 
-// dgraph2 supports multi-tenancy without ACL: clients tag requests with a
+// bonsai supports multi-tenancy without ACL: clients tag requests with a
 // namespace ID and the engine isolates the data. ExtractNamespaceFrom
 // (and its sibling ExtractNamespace in x.go) read the namespace from the
 // gRPC metadata key "namespace" or HTTP request via WithNamespace.
@@ -22,7 +22,7 @@ type ctxKey int
 const namespaceCtxKey ctxKey = 0
 
 // WithNamespace returns a new context with the given namespace set.
-// pkg/dgraph2 and the gRPC/HTTP adapters use this to thread the
+// pkg/bonsai and the gRPC/HTTP adapters use this to thread the
 // per-request namespace down through the worker layer.
 func WithNamespace(ctx context.Context, ns uint64) context.Context {
 	return context.WithValue(ctx, namespaceCtxKey, ns)

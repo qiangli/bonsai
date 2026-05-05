@@ -1,8 +1,8 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Minimal GraphQL endpoint for dgraph2.
+ * Minimal GraphQL endpoint for bonsai.
  *
  * Scope (intentional):
  *   - Translate top-level GraphQL queries to DQL and return GraphQL-shape JSON.
@@ -55,9 +55,9 @@ import (
 	"github.com/dgraph-io/gqlparser/v2/ast"
 	"github.com/dgraph-io/gqlparser/v2/parser"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
+	"github.com/qiangli/bonsai/pkg/bonsai"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
 )
 
 // Request is the standard GraphQL POST body.
@@ -79,7 +79,7 @@ type errorEntry struct {
 }
 
 // Handler returns an http.HandlerFunc that serves GraphQL queries against db.
-func Handler(db *dgraph2.DB) http.HandlerFunc {
+func Handler(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -99,7 +99,7 @@ func Handler(db *dgraph2.DB) http.HandlerFunc {
 
 // Execute parses the GraphQL request, translates each top-level operation
 // into DQL or a Mutate call, and returns a GraphQL-shaped response.
-func Execute(ctx context.Context, db *dgraph2.DB, req *Request) *Response {
+func Execute(ctx context.Context, db *bonsai.DB, req *Request) *Response {
 	if req == nil || strings.TrimSpace(req.Query) == "" {
 		return &Response{Errors: []errorEntry{{Message: "empty query"}}}
 	}
@@ -157,7 +157,7 @@ func dgraphSchemaType(name string) (pb.TypeUpdate, bool) {
 	return schema.State().GetType(name)
 }
 
-// splitNamespacedAttr strips the 8-byte namespace prefix that dgraph2
+// splitNamespacedAttr strips the 8-byte namespace prefix that bonsai
 // prepends to every predicate name. The translator wants the bare predicate.
 func splitNamespacedAttr(p string) (ns []byte, attr string) {
 	if len(p) < 8 {

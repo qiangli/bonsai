@@ -6,7 +6,7 @@
 package worker
 
 import (
-	"github.com/qiangli/dgraph2/types"
+	"github.com/qiangli/bonsai/types"
 )
 
 func couldApplyAggregatorOn(agrtr string, typ types.TypeID) bool {

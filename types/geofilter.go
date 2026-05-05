@@ -15,8 +15,8 @@ import (
 	geom "github.com/twpayne/go-geom"
 	"github.com/twpayne/go-geom/xy"
 
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/x"
 )
 
 // QueryType indicates the type of geo query.

@@ -4,54 +4,60 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-`dgraph2` is a single-node, embeddable fork of upstream Dgraph. The cluster machinery
-(Zero, Raft, inter-alpha gRPC, group sharding, distributed Oracle, ACL, at-rest encryption,
-Vault) has been removed. The DQL parser, posting store, schema, indexing, and the worker
-query-execution engine are preserved. A reference copy of upstream Dgraph lives at
-`priorart/dgraph/` (gitignored) and is the source for porting work — read it, do not edit it.
+**Bonsai** is a single-node, embeddable graph database — a carefully pruned fork of
+upstream Dgraph. The cluster machinery (Zero, Raft, inter-alpha gRPC, group sharding,
+distributed Oracle, ACL, at-rest encryption, Vault) has been removed. The DQL parser,
+posting store, schema, indexing, and the worker query-execution engine are preserved.
+The Go module is `github.com/qiangli/bonsai`; the public API lives at `pkg/bonsai/`.
+A reference copy of upstream Dgraph lives at `priorart/dgraph/` (gitignored) and is the
+source for porting work — read it, do not edit it.
 
-`REWRITE_STATUS.md` is the running ledger of what has landed vs. what is still open
-(bulk loader, GraphQL, upstream test fixtures). Skim it before starting a new feature.
+The name comes from the metaphor: a bonsai is the same plant as the full-size tree,
+trimmed to a manageable form while keeping the structure intact. That's the project.
+
+Earlier history: this project was developed under the working name `dgraph2` and
+renamed to `bonsai` in one pass; recent commits (`Wave 7d` and earlier) still
+reference the old name in their messages.
 
 ## Build / test / run
 
 ```
-make build      # go build ./cmd/dgraph2-server
-make test       # go test -count=1 ./pkg/dgraph2/... ./cmd/dgraph2-server/...
-make vet        # go vet — only on dgraph2-authored packages (see note below)
+make build      # go build ./cmd/bonsai-server
+make test       # go test -count=1 ./pkg/bonsai/... ./cmd/bonsai-server/...
+make vet        # go vet — only on bonsai-authored packages (see note below)
 make all        # vet + build + test
-make clean      # rm dgraph2-server
+make clean      # rm bonsai-server
 
 # Run a single test
-go test -count=1 -run TestDQLEdgeTraversal ./pkg/dgraph2/...
-go test -count=1 -run TestServerHTTP       ./cmd/dgraph2-server/...
+go test -count=1 -run TestDQLEdgeTraversal ./pkg/bonsai/...
+go test -count=1 -run TestServerHTTP       ./cmd/bonsai-server/...
 
 # Run the server
-./dgraph2-server --dir ./data --http :8080 --grpc :9080
-./dgraph2-server --dir ./data --trace-stdout                    # OTel stdout exporter
-./dgraph2-server --tls-cert cert.pem --tls-key key.pem ...      # TLS on both HTTP+gRPC
+./bonsai-server --dir ./data --http :8080 --grpc :9080
+./bonsai-server --dir ./data --trace-stdout                    # OTel stdout exporter
+./bonsai-server --tls-cert cert.pem --tls-key key.pem ...      # TLS on both HTTP+gRPC
 
 # CLI client (talks to the gRPC server)
-./dgraph2-cli alter '<schema>'
-./dgraph2-cli query '<dql>'
-./dgraph2-cli mutate '<rdf>'
-./dgraph2-cli drop-all | drop-data
+./bonsai-cli alter '<schema>'
+./bonsai-cli query '<dql>'
+./bonsai-cli mutate '<rdf>'
+./bonsai-cli drop-all | drop-data
 ```
 
-`make vet` deliberately scopes to `pkg/dgraph2/...`, `cmd/dgraph2-server/...`, `worker/...`.
+`make vet` deliberately scopes to `pkg/bonsai/...`, `cmd/bonsai-server/...`, `worker/...`.
 `go vet ./...` reports many pre-existing `copylocks` warnings in proto-generated upstream
-types — those are inherited and unrelated to dgraph2 work. Don't try to "fix" them.
+types — those are inherited and unrelated to bonsai work. Don't try to "fix" them.
 
 ## Architecture
 
 ```
-cmd/dgraph2-server/    HTTP + gRPC server. HTTP routes: /query /mutate /alter /set /get
+cmd/bonsai-server/    HTTP + gRPC server. HTTP routes: /query /mutate /alter /set /get
                        /assign /admin/{backup,restore,export,schema,state,draining,
                        shutdown,namespace} /metrics /debug/pprof/*. The gRPC adapter
-                       (grpc.go) implements api.DgraphServer by delegating to *dgraph2.DB,
+                       (grpc.go) implements api.DgraphServer by delegating to *bonsai.DB,
                        so existing dgo/v250 clients connect unchanged.
-cmd/dgraph2-cli/       Thin gRPC client. Stateless, reconnects per invocation.
-pkg/dgraph2/           The Go API: DB.{Open,Close,Alter,Mutate,Query,QueryWithVars,
+cmd/bonsai-cli/       Thin gRPC client. Stateless, reconnects per invocation.
+pkg/bonsai/           The Go API: DB.{Open,Close,Alter,Mutate,Query,QueryWithVars,
                        Upsert,Set,Get,Backup,RestoreFrom,Export,Drop{All,Data,Predicate,
                        Type},SchemaText,AssignUid,CreateNamespace,DropNamespace,
                        ListNamespaces}. db_test.go and feature_test.go are the e2e suite.
@@ -71,7 +77,7 @@ priorart/dgraph/       Gitignored reference copy of upstream. Read-only source f
 These are easy to break and hard to debug. Keep them in mind when touching the data path.
 
 - **Single timestamp source**: `worker.localTs` (atomic, process-wide) is the only
-  monotonic timestamp generator. `pkg/dgraph2.DB.nextTs()` and `worker.NextTs()` both
+  monotonic timestamp generator. `pkg/bonsai.DB.nextTs()` and `worker.NextTs()` both
   advance it. Don't add a second counter; the rewrite already removed the racy
   `nextLocalTs` loop that used to deadlock under load.
 
@@ -84,7 +90,7 @@ These are easy to break and hard to debug. Keep them in mind when touching the d
   sharding / `grpcWorker.ServeTask` paths. A process-wide lock serialises mutations.
 
 - **UID counter persistence**: the high-water UID is stored under the reserved Badger
-  key `__dgraph2_max_uid`. On Open it's read into `worker.SetMaxUID`. The standard
+  key `__bonsai_max_uid`. On Open it's read into `worker.SetMaxUID`. The standard
   `x.DataKey/IndexKey/...` prefixes never collide with this key.
 
 - **Cluster-only gRPC RPCs return `Unimplemented`** via `UnimplementedDgraphServer`
@@ -98,8 +104,8 @@ These are easy to break and hard to debug. Keep them in mind when touching the d
 
 ## Conventions
 
-- Go module: `github.com/qiangli/dgraph2`. Go 1.26.
-- Badger lives at `<dir>/p` — never write outside it; reserved keys use a `__dgraph2_`
+- Go module: `github.com/qiangli/bonsai`. Go 1.26.
+- Badger lives at `<dir>/p` — never write outside it; reserved keys use a `__bonsai_`
   prefix to stay clear of upstream key prefixes.
 - Schema: DQL syntax (`name: string @index(exact) . age: int .`). `Alter` snapshots the
   old schema, applies the new, and `posting.IndexRebuild.{DropIndexes,BuildIndexes}` runs

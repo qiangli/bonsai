@@ -12,8 +12,8 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/x"
 )
 
 func (start *SubGraph) expandRecurse(ctx context.Context, maxDepth uint64) error {

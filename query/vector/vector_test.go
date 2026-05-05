@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/dgraphapi"
-	"github.com/qiangli/dgraph2/dgraphtest"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/dgraphapi"
+	"github.com/qiangli/bonsai/dgraphtest"
+	"github.com/qiangli/bonsai/x"
 	"github.com/stretchr/testify/require"
 )
 

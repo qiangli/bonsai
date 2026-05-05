@@ -13,11 +13,11 @@ import (
 	"github.com/golang/glog"
 	"github.com/pkg/errors"
 
-	"github.com/qiangli/dgraph2/lex"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/tok"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/lex"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/tok"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 // ParseBytes parses the byte array which holds the schema. We will reset

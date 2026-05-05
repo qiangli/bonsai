@@ -26,20 +26,20 @@ import (
 	"github.com/twpayne/go-geom/encoding/geojson"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/task"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/types/facets"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/task"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/types/facets"
+	"github.com/qiangli/bonsai/x"
 	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 // ToJson converts the list of subgraph into a JSON response by calling toFastJSON.
 //
-// dgraph2 has dropped the upstream GraphQL output path; the upstream signature
+// bonsai has dropped the upstream GraphQL output path; the upstream signature
 // took a `gqlSchema.Field` parameter that drove GraphQL-formatted output.
-// In dgraph2 the result is always rendered in DQL form.
+// In bonsai the result is always rendered in DQL form.
 func ToJson(ctx context.Context, l *Latency, sgl []*SubGraph) ([]byte, error) {
 	sgr := &SubGraph{}
 	for _, sg := range sgl {

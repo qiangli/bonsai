@@ -6,8 +6,8 @@
 package hnsw
 
 import (
-	c "github.com/qiangli/dgraph2/tok/constraints"
-	"github.com/qiangli/dgraph2/tok/index"
+	c "github.com/qiangli/bonsai/tok/constraints"
+	"github.com/qiangli/bonsai/tok/index"
 
 	"fmt"
 )

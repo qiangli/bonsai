@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qiangli/dgraph2/pkg/ui"
+	"github.com/qiangli/bonsai/pkg/ui"
 )
 
 // TestHandlerServesIndex confirms `/` returns the embedded HTML page
@@ -32,7 +32,7 @@ func TestHandlerServesIndex(t *testing.T) {
 		}
 		body := w.Body.String()
 		for _, want := range []string{
-			"dgraph2 Explorer",
+			"Bonsai Explorer",
 			`id="query-text"`,
 			`id="schema-list"`,
 			`/admin/schema`,

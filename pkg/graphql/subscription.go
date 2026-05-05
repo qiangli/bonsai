@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * GraphQL subscriptions over WebSocket using the graphql-transport-ws
@@ -36,7 +36,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 )
 
 const (
@@ -50,7 +50,7 @@ const (
 
 // SubscriptionHandler returns an http.HandlerFunc that upgrades to a
 // WebSocket and serves graphql-transport-ws subscriptions backed by db.
-func SubscriptionHandler(db *dgraph2.DB) http.HandlerFunc {
+func SubscriptionHandler(db *bonsai.DB) http.HandlerFunc {
 	upgrader := websocket.Upgrader{
 		Subprotocols: []string{"graphql-transport-ws"},
 		// Allow connections from any origin — the operator surface is
@@ -82,7 +82,7 @@ type subPayload struct {
 
 // serveWS handles one WebSocket connection's lifecycle: connection_init,
 // subscribe / complete, and graceful close.
-func serveWS(parentCtx context.Context, db *dgraph2.DB, conn *websocket.Conn) {
+func serveWS(parentCtx context.Context, db *bonsai.DB, conn *websocket.Conn) {
 	defer func() { _ = conn.Close() }()
 
 	// Coordinate writes from multiple subscription goroutines.
@@ -163,7 +163,7 @@ func serveWS(parentCtx context.Context, db *dgraph2.DB, conn *websocket.Conn) {
 // `next` message only when the result hash changes from the prior send.
 func runSubscription(
 	ctx context.Context,
-	db *dgraph2.DB,
+	db *bonsai.DB,
 	id string,
 	p subPayload,
 	send func(wsMessage) error,
@@ -215,7 +215,7 @@ func runSubscription(
 
 // evalAndHash runs Execute against the request and returns both the
 // response and a stable hex hash of its serialised form.
-func evalAndHash(ctx context.Context, db *dgraph2.DB, p *subPayload) (*Response, string) {
+func evalAndHash(ctx context.Context, db *bonsai.DB, p *subPayload) (*Response, string) {
 	resp := Execute(ctx, db, &Request{
 		Query:         p.Query,
 		OperationName: p.OperationName,

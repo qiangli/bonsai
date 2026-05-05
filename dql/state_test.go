@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/qiangli/dgraph2/lex"
+	"github.com/qiangli/bonsai/lex"
 )
 
 func TestQueryLexing(t *testing.T) {

@@ -14,8 +14,8 @@ import (
 
 	"github.com/dgryski/go-groupvarint"
 
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/x"
 	"github.com/dgraph-io/ristretto/v2/z"
 )
 

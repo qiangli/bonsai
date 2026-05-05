@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -25,16 +25,16 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 )
 
-// TestServerHTTP exercises the dgraph2-server HTTP endpoints end-to-end:
+// TestServerHTTP exercises the bonsai-server HTTP endpoints end-to-end:
 // Alter -> Assign -> Set -> Get, plus Health and Backup. The DB is opened
 // against a t.TempDir() so each test starts clean; the HTTP layer is mounted
 // under httptest so we don't need real port binding.
 func TestServerHTTP(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -134,7 +134,7 @@ func mustGet(t *testing.T, url string) *http.Response {
 // /admin/draining, /admin/namespace, /admin/export.
 func TestServerAdmin(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestServerAdmin(t *testing.T) {
 // TestServerOps exercises /metrics, /admin/schema GET, /debug/pprof.
 func TestServerOps(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -253,11 +253,11 @@ func TestServerOps(t *testing.T) {
 }
 
 // TestServerGRPC exercises the gRPC api.DgraphServer adapter via the dgo
-// client. Proves that a real Dgraph client can talk to dgraph2-server
+// client. Proves that a real Dgraph client can talk to bonsai-server
 // unchanged.
 func TestServerGRPC(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

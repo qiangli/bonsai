@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/qiangli/dgraph2/tok/index"
+	"github.com/qiangli/bonsai/tok/index"
 	"github.com/pkg/errors"
 )
 

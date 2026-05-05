@@ -6,7 +6,7 @@
 package algo
 
 import (
-	"github.com/qiangli/dgraph2/codec"
+	"github.com/qiangli/bonsai/codec"
 )
 
 type elem struct {

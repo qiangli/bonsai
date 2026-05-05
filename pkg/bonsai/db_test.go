@@ -1,9 +1,9 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  */
 
-package dgraph2_test
+package bonsai_test
 
 import (
 	"context"
@@ -15,15 +15,15 @@ import (
 
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/pkg/bonsai"
+	"github.com/qiangli/bonsai/x"
 )
 
 // TestOpenClose exercises the database lifecycle: open, then close, in a
 // fresh temp dir.
 func TestOpenClose(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestOpenClose(t *testing.T) {
 func TestAlterAndReopen(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("first Open failed: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestAlterAndReopen(t *testing.T) {
 	}
 
 	// Reopen — the schema we wrote should be loaded from Badger.
-	db, err = dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err = bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("reopen failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestAlterAndReopen(t *testing.T) {
 // to end.
 func TestSetGetRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSetGetRoundtrip(t *testing.T) {
 // the predicate is not in the schema.
 func TestGetMissingPredicate(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestGetMissingPredicate(t *testing.T) {
 // TestGetMissingTriple returns ErrNoValue when the triple has not been Set.
 func TestGetMissingTriple(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
@@ -134,18 +134,18 @@ func TestGetMissingTriple(t *testing.T) {
 	}
 
 	_, err = db.Get(ctx, 42, "name")
-	if !errors.Is(err, dgraph2.ErrNoValue) {
+	if !errors.Is(err, bonsai.ErrNoValue) {
 		t.Fatalf("expected ErrNoValue, got %v", err)
 	}
 }
 
 // TestPersistsAcrossReopen writes data, closes, and reopens; data must
 // still be readable. Exercises the tsCount + maxUID persistence wired
-// through pstore.MaxVersion + the __dgraph2_max_uid Badger key.
+// through pstore.MaxVersion + the __bonsai_max_uid Badger key.
 func TestPersistsAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open 1: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestPersistsAcrossReopen(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	db, err = dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err = bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open 2: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestBackupRestore(t *testing.T) {
 	dstDir := t.TempDir()
 	backupPath := srcDir + "/backup.bin"
 
-	src, err := dgraph2.Open(dgraph2.Options{Dir: srcDir})
+	src, err := bonsai.Open(bonsai.Options{Dir: srcDir})
 	if err != nil {
 		t.Fatalf("Open src: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestBackupRestore(t *testing.T) {
 		t.Fatalf("Close src: %v", err)
 	}
 
-	dst, err := dgraph2.Open(dgraph2.Options{Dir: dstDir})
+	dst, err := bonsai.Open(bonsai.Options{Dir: dstDir})
 	if err != nil {
 		t.Fatalf("Open dst: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestBackupRestore(t *testing.T) {
 //   - worker.MutateOverNetwork (the real local apply, not the stub)
 func TestMutateRDF(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -293,7 +293,7 @@ func TestMutateRDF(t *testing.T) {
 // must succeed because Alter triggered a backfill of the index.
 func TestAlterRebuildsIndex(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestAlterRebuildsIndex(t *testing.T) {
 // posting reads, end to end.
 func TestDQLQuery(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestDQLQuery(t *testing.T) {
 // TestDQLFilters exercises filter functions: ge, le, has.
 func TestDQLFilters(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestDQLFilters(t *testing.T) {
 // TestDQLPagination tests first/offset.
 func TestDQLPagination(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestDQLPagination(t *testing.T) {
 // TestDQLDeleteRoundtrip — set, delete, then verify gone.
 func TestDQLDeleteRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestDQLDeleteRoundtrip(t *testing.T) {
 // alice knows bob; query for alice's friends should expand the edge.
 func TestDQLEdgeTraversal(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestDQLEdgeTraversal(t *testing.T) {
 // TestDQLCount exercises `count(predicate)`.
 func TestDQLCount(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestDQLPersistsAcrossReopen(t *testing.T) {
 	ctx := context.Background()
 
 	{
-		db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+		db, err := bonsai.Open(bonsai.Options{Dir: dir})
 		if err != nil {
 			t.Fatalf("Open 1: %v", err)
 		}
@@ -608,7 +608,7 @@ func TestDQLPersistsAcrossReopen(t *testing.T) {
 		}
 	}
 
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open 2: %v", err)
 	}
@@ -640,7 +640,7 @@ func TestDQLBackupRestoreRoundtrip(t *testing.T) {
 
 	var r1Uid uint64
 	{
-		db, err := dgraph2.Open(dgraph2.Options{Dir: src})
+		db, err := bonsai.Open(bonsai.Options{Dir: src})
 		if err != nil {
 			t.Fatalf("Open src: %v", err)
 		}
@@ -665,7 +665,7 @@ func TestDQLBackupRestoreRoundtrip(t *testing.T) {
 		_ = db.Close()
 	}
 
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dst})
+	db, err := bonsai.Open(bonsai.Options{Dir: dst})
 	if err != nil {
 		t.Fatalf("Open dst: %v", err)
 	}
@@ -703,7 +703,7 @@ func TestBackupToManifestRoundtrip(t *testing.T) {
 	ctx := context.Background()
 
 	{
-		db, err := dgraph2.Open(dgraph2.Options{Dir: src})
+		db, err := bonsai.Open(bonsai.Options{Dir: src})
 		if err != nil {
 			t.Fatalf("Open src: %v", err)
 		}
@@ -716,7 +716,7 @@ func TestBackupToManifestRoundtrip(t *testing.T) {
 		`)}); err != nil {
 			t.Fatalf("Mutate full: %v", err)
 		}
-		full, err := db.BackupTo(ctx, dgraph2.BackupOptions{Dir: bdir, Type: dgraph2.BackupFull})
+		full, err := db.BackupTo(ctx, bonsai.BackupOptions{Dir: bdir, Type: bonsai.BackupFull})
 		if err != nil {
 			t.Fatalf("BackupTo full: %v", err)
 		}
@@ -729,7 +729,7 @@ func TestBackupToManifestRoundtrip(t *testing.T) {
 		`)}); err != nil {
 			t.Fatalf("Mutate incr: %v", err)
 		}
-		incr, err := db.BackupTo(ctx, dgraph2.BackupOptions{Dir: bdir, Type: dgraph2.BackupIncremental})
+		incr, err := db.BackupTo(ctx, bonsai.BackupOptions{Dir: bdir, Type: bonsai.BackupIncremental})
 		if err != nil {
 			t.Fatalf("BackupTo incr: %v", err)
 		}
@@ -739,7 +739,7 @@ func TestBackupToManifestRoundtrip(t *testing.T) {
 		_ = db.Close()
 	}
 
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dst})
+	db, err := bonsai.Open(bonsai.Options{Dir: dst})
 	if err != nil {
 		t.Fatalf("Open dst: %v", err)
 	}
@@ -1001,7 +1001,7 @@ func TestNamespaceIsolation(t *testing.T) {
 func TestNamespacePersistence(t *testing.T) {
 	dir := t.TempDir()
 	{
-		db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+		db, err := bonsai.Open(bonsai.Options{Dir: dir})
 		if err != nil {
 			t.Fatalf("Open 1: %v", err)
 		}
@@ -1010,7 +1010,7 @@ func TestNamespacePersistence(t *testing.T) {
 		}
 		_ = db.Close()
 	}
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open 2: %v", err)
 	}
@@ -1032,7 +1032,7 @@ func TestNamespacePersistence(t *testing.T) {
 // zero is rejected on Set and Get.
 func TestZeroUidRejected(t *testing.T) {
 	dir := t.TempDir()
-	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	db, err := bonsai.Open(bonsai.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

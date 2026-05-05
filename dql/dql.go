@@ -8,7 +8,7 @@ package dql
 import (
 	"github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/lex"
+	"github.com/qiangli/bonsai/lex"
 )
 
 func ParseDQL(dqlQuery string) (*api.Request, error) {

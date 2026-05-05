@@ -19,11 +19,11 @@ import (
 	"golang.org/x/crypto/blake2b"
 	"golang.org/x/text/collate"
 
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/tok/hnsw"
-	opts "github.com/qiangli/dgraph2/tok/options"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/tok/hnsw"
+	opts "github.com/qiangli/bonsai/tok/options"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 // Tokenizer identifiers are unique and can't be reused.

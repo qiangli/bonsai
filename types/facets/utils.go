@@ -14,9 +14,9 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/tok"
-	"github.com/qiangli/dgraph2/types"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/tok"
+	"github.com/qiangli/bonsai/types"
 )
 
 // SortAndValidate sorts And validates the facets.

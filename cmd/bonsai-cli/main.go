@@ -1,8 +1,8 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * dgraph2-cli — minimal command-line client.
+ * bonsai-cli — minimal command-line client.
  *
  * Subcommands using the gRPC api.DgraphServer:
  *   alter <schemaText>          — apply schema
@@ -251,7 +251,7 @@ func getAdminToWriter(ctx context.Context, base, path string, q url.Values, out 
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage: dgraph2-cli [--addr 127.0.0.1:9080] [--http http://127.0.0.1:8080] <command> [args]
+	fmt.Fprintln(os.Stderr, `usage: bonsai-cli [--addr 127.0.0.1:9080] [--http http://127.0.0.1:8080] <command> [args]
 
 gRPC commands:
   alter <schema>           apply a DQL schema

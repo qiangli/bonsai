@@ -12,10 +12,10 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/qiangli/dgraph2/schema"
-	"github.com/qiangli/dgraph2/tok"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/schema"
+	"github.com/qiangli/bonsai/tok"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/x"
 )
 
 func verifyStringIndex(ctx context.Context, attr string, funcType FuncType) (string, bool) {

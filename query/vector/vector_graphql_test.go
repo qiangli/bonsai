@@ -13,7 +13,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/qiangli/dgraph2/dgraphapi"
+	"github.com/qiangli/bonsai/dgraphapi"
 	"github.com/stretchr/testify/require"
 )
 

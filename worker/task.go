@@ -25,21 +25,21 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/dgo/v250/protos/api"
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/posting"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/schema"
-	ctask "github.com/qiangli/dgraph2/task"
-	"github.com/qiangli/dgraph2/tok"
-	"github.com/qiangli/dgraph2/tok/hnsw"
-	"github.com/qiangli/dgraph2/tok/index"
-	"github.com/qiangli/dgraph2/types"
-	"github.com/qiangli/dgraph2/types/facets"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/posting"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/schema"
+	ctask "github.com/qiangli/bonsai/task"
+	"github.com/qiangli/bonsai/tok"
+	"github.com/qiangli/bonsai/tok/hnsw"
+	"github.com/qiangli/bonsai/tok/index"
+	"github.com/qiangli/bonsai/types"
+	"github.com/qiangli/bonsai/types/facets"
+	"github.com/qiangli/bonsai/x"
 )
 
 // ProcessTaskOverNetwork is the entry point query/ uses to fetch UIDs/values
-// for a single predicate. In dgraph2 there are no remote groups, so this is
+// for a single predicate. In bonsai there are no remote groups, so this is
 // just a thin wrapper around the local processTask.
 func ProcessTaskOverNetwork(ctx context.Context, q *pb.Query) (*pb.Result, error) {
 	return processTask(ctx, q, 1)
@@ -901,7 +901,7 @@ func processTask(ctx context.Context, q *pb.Query, gid uint32) (*pb.Result, erro
 	if err := posting.Oracle().WaitForTs(ctx, q.ReadTs); err != nil {
 		return nil, err
 	}
-	// dgraph2 has no group/tablet routing; everything is local. No need to
+	// bonsai has no group/tablet routing; everything is local. No need to
 	// check ChecksumsMatch, BelongsToReadOnly, or groupId() — see plan
 	// REWRITE_STATUS.md.
 
@@ -2075,7 +2075,7 @@ func interpretVFloatOrUid(val string) ([]float32, uint64, error) {
 	return nil, uid, errors.Errorf("Value %q is not a uid or vector", val)
 }
 
-// (gRPC ServeTask handler removed — dgraph2 has no inter-alpha gRPC.
+// (gRPC ServeTask handler removed — bonsai has no inter-alpha gRPC.
 //  Local callers use processTask directly via ProcessTaskOverNetwork above.)
 
 // applyFacetsTree : we return error only when query has some problems.

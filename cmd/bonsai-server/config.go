@@ -1,8 +1,8 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Config layering: CLI flags (pflag) > env vars (DGRAPH2_*) > YAML config file
+ * Config layering: CLI flags (pflag) > env vars (BONSAI_*) > YAML config file
  * > flag defaults. After flag.Parse(), loadConfig binds every flag to viper,
  * reads the optional YAML, and writes any env/YAML value back into the flag
  * unless the user set it explicitly on the command line. Downstream code keeps
@@ -21,7 +21,7 @@ import (
 
 func loadConfig(configFile string) error {
 	v := viper.New()
-	v.SetEnvPrefix("DGRAPH2")
+	v.SetEnvPrefix("BONSAI")
 	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	v.AutomaticEnv()
 

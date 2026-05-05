@@ -1,4 +1,4 @@
-module github.com/qiangli/dgraph2
+module github.com/qiangli/bonsai
 
 go 1.26.1
 

@@ -11,7 +11,7 @@ import (
 
 	"github.com/twpayne/go-geom"
 
-	"github.com/qiangli/dgraph2/protos/pb"
+	"github.com/qiangli/bonsai/protos/pb"
 )
 
 const (

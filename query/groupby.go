@@ -12,9 +12,9 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/qiangli/dgraph2/algo"
-	"github.com/qiangli/dgraph2/protos/pb"
-	"github.com/qiangli/dgraph2/types"
+	"github.com/qiangli/bonsai/algo"
+	"github.com/qiangli/bonsai/protos/pb"
+	"github.com/qiangli/bonsai/types"
 )
 
 type groupPair struct {

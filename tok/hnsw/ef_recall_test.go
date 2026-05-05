@@ -13,9 +13,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/qiangli/dgraph2/tok/index"
-	opt "github.com/qiangli/dgraph2/tok/options"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/tok/index"
+	opt "github.com/qiangli/bonsai/tok/options"
+	"github.com/qiangli/bonsai/x"
 )
 
 // memoryCache satisfies index.CacheType for synthetic tests.

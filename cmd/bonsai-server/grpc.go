@@ -1,9 +1,9 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
  * gRPC api.DgraphServer adapter. Existing dgo clients connect over gRPC and
- * call Query/Mutate/Alter/CommitOrAbort; we delegate each RPC to *dgraph2.DB.
+ * call Query/Mutate/Alter/CommitOrAbort; we delegate each RPC to *bonsai.DB.
  *
  * Cluster-only RPCs (Login, CreateNamespace, DropNamespace, ListNamespaces,
  * StreamExtSnapshot, UpdateExtSnapshotStreamingState) are inherited as the
@@ -18,15 +18,15 @@ import (
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
 
-	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/bonsai/pkg/bonsai"
 )
 
 type grpcAdapter struct {
 	api.UnimplementedDgraphServer
-	db *dgraph2.DB
+	db *bonsai.DB
 }
 
-func newGRPCAdapter(db *dgraph2.DB) *grpcAdapter { return &grpcAdapter{db: db} }
+func newGRPCAdapter(db *bonsai.DB) *grpcAdapter { return &grpcAdapter{db: db} }
 
 // Query implements the DQL query path. The dgo client uses this for both
 // queries and mutations bundled in api.Request.
@@ -111,7 +111,7 @@ func (g *grpcAdapter) Alter(ctx context.Context, op *api.Operation) (*api.Payloa
 	return &api.Payload{}, nil
 }
 
-// CommitOrAbort is a no-op in dgraph2 because Mutate commits synchronously.
+// CommitOrAbort is a no-op in bonsai because Mutate commits synchronously.
 // We acknowledge so dgo's `txn.Commit()` doesn't error out.
 func (g *grpcAdapter) CommitOrAbort(_ context.Context, tc *api.TxnContext) (*api.TxnContext, error) {
 	if tc == nil {
@@ -120,10 +120,10 @@ func (g *grpcAdapter) CommitOrAbort(_ context.Context, tc *api.TxnContext) (*api
 	return tc, nil
 }
 
-// CheckVersion returns the dgraph2 version string. The package-level `version`
+// CheckVersion returns the bonsai version string. The package-level `version`
 // var in main.go is set at build time via `-ldflags "-X main.version=..."`.
 func (g *grpcAdapter) CheckVersion(_ context.Context, _ *api.Check) (*api.Version, error) {
-	return &api.Version{Tag: "dgraph2-" + version}, nil
+	return &api.Version{Tag: "bonsai-" + version}, nil
 }
 
 // RunDQL is the newer combined-DQL endpoint. Same shape as Query.

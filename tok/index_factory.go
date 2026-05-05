@@ -8,8 +8,8 @@ package tok
 import (
 	"github.com/pkg/errors"
 
-	"github.com/qiangli/dgraph2/tok/index"
-	opts "github.com/qiangli/dgraph2/tok/options"
+	"github.com/qiangli/bonsai/tok/index"
+	opts "github.com/qiangli/bonsai/tok/options"
 )
 
 // registerIndexFactory(f) will register f as both a Tokenizer and specifically

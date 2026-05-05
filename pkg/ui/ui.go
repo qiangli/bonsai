@@ -1,8 +1,8 @@
 /*
- * SPDX-FileCopyrightText: dgraph2 contributors
+ * SPDX-FileCopyrightText: bonsai contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * Embedded single-page UI. Served by dgraph2-server at "/" via go:embed
+ * Embedded single-page UI. Served by bonsai-server at "/" via go:embed
  * so there's no build step, no Node, and no second deployment.
  */
 
@@ -18,7 +18,7 @@ var assets embed.FS
 
 // Handler serves the embedded UI. Mount at "/" or any prefix; the page
 // uses absolute paths to /admin/schema, /admin/state, /query, /graphql,
-// so it talks to whatever dgraph2-server is hosting it.
+// so it talks to whatever bonsai-server is hosting it.
 func Handler() http.Handler {
 	// http.FileServerFS would do, but we want / to map to index.html and
 	// keep the package boundary self-contained.

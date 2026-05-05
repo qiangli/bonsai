@@ -11,9 +11,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/qiangli/dgraph2/dgraphapi"
-	"github.com/qiangli/dgraph2/dgraphtest"
-	"github.com/qiangli/dgraph2/x"
+	"github.com/qiangli/bonsai/dgraphapi"
+	"github.com/qiangli/bonsai/dgraphtest"
+	"github.com/qiangli/bonsai/x"
 )
 
 func TestMain(m *testing.M) {

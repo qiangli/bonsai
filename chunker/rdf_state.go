@@ -8,7 +8,7 @@ package chunker
 import (
 	"strconv"
 
-	"github.com/qiangli/dgraph2/lex"
+	"github.com/qiangli/bonsai/lex"
 )
 
 // The constants represent different types of lexed Items possible for an rdf N-Quad.
