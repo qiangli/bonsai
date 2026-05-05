@@ -45,7 +45,21 @@ func main() {
 	grpcAddr := flag.String("grpc", ":9080", "gRPC listen address")
 	tlsCert := flag.String("tls-cert", "", "PEM-encoded TLS cert (enables TLS on both HTTP and gRPC)")
 	tlsKey := flag.String("tls-key", "", "PEM-encoded TLS private key")
+	traceStdout := flag.Bool("trace-stdout", false, "emit OpenTelemetry traces to stdout")
 	flag.Parse()
+
+	// Wire an OpenTelemetry tracer provider if requested. dgraph2 has otel
+	// imports throughout query/ and worker/, but no exporter is registered
+	// by default — the spans are no-ops. With --trace-stdout we install
+	// the stdout exporter so operators can see spans during development.
+	if *traceStdout {
+		if shutdown, err := setupTracingStdout(); err == nil {
+			defer func() { _ = shutdown(context.Background()) }()
+			log.Printf("OpenTelemetry stdout tracing enabled")
+		} else {
+			log.Printf("trace-stdout setup failed: %v", err)
+		}
+	}
 
 	db, err := dgraph2.Open(dgraph2.Options{Dir: *dir})
 	if err != nil {
