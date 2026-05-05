@@ -532,6 +532,11 @@ var ErrNoValue = posting.ErrNoValue
 // per-tablet, and produced multi-file manifests; in dgraph2 the database is
 // a single embedded Badger, so backup is a single Stream snapshot at the
 // current timestamp.
+//
+// We read the snapshot at the maximum of the local DB counter and the
+// worker timestamp counter (which is what mutations advance). Reading at a
+// stale ts misses freshly-committed mutations that hadn't propagated to the
+// DB-side counter yet.
 func (d *DB) Backup(ctx context.Context, dst string) error {
 	f, err := os.Create(dst)
 	if err != nil {
@@ -539,7 +544,11 @@ func (d *DB) Backup(ctx context.Context, dst string) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	stream := d.pstore.NewStreamAt(d.tsCount.Load())
+	readTs := d.tsCount.Load()
+	if w := worker.CurrentTs(); w > readTs {
+		readTs = w
+	}
+	stream := d.pstore.NewStreamAt(readTs)
 	if _, err := stream.Backup(f, 0); err != nil {
 		return fmt.Errorf("Backup: stream: %w", err)
 	}
@@ -547,12 +556,12 @@ func (d *DB) Backup(ctx context.Context, dst string) error {
 }
 
 // RestoreFrom seeds a freshly opened DB from a backup file produced by
-// Backup. The DB must be empty (or at least, not contain data older than the
-// backup) — Badger's Load merges the snapshot into the existing key space.
+// Backup. Badger's Load calls Prepare(), which wipes existing keys, so the
+// destination DB must be the open we want the snapshot to replace.
 //
-// After loading, we advance the local timestamp counter past whatever was
-// written in the backup so that fresh writes in this process don't clash
-// with restored versions, and so that Get's readTs sees the restored data.
+// After loading, we advance the local timestamp counter past the backup's
+// high-water mark, refresh the posting cache (the old in-memory entries
+// point at keys that Prepare dropped), and reload the schema state.
 func (d *DB) RestoreFrom(_ context.Context, src string) error {
 	f, err := os.Open(src)
 	if err != nil {
@@ -562,14 +571,27 @@ func (d *DB) RestoreFrom(_ context.Context, src string) error {
 	if err := d.pstore.Load(f, 16); err != nil {
 		return fmt.Errorf("RestoreFrom: %w", err)
 	}
+
 	// Advance our local timestamp counter past the backup's high-water mark
 	// so reads see restored data and future writes get fresh timestamps.
-	if maxV := d.pstore.MaxVersion(); maxV > d.tsCount.Load() {
-		d.tsCount.Store(maxV + 1)
+	maxV := d.pstore.MaxVersion()
+	// Conservative: even if MaxVersion under-reports after Load, advance to
+	// at least worker.CurrentTs+1 so future writes don't collide.
+	target := maxV + 1
+	if cur := worker.CurrentTs() + 1; cur > target {
+		target = cur
 	}
+	d.tsCount.Store(target)
+	worker.SeedLocalTs(target)
+
+	// Drop the posting layer's in-memory cache, which still references the
+	// keys Badger.Load.Prepare() just dropped.
+	posting.ResetCache()
+
 	// Tell the posting Oracle the new max-assigned ts so reads at this
 	// timestamp do not block in WaitForTs.
 	posting.Oracle().ProcessDelta(&pb.OracleDelta{MaxAssigned: d.tsCount.Load()})
+
 	// Refresh the in-memory schema cache from disk so subsequent Get/Set
 	// calls see the recovered predicate definitions.
 	return schema.LoadFromDb(context.Background())

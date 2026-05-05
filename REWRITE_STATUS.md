@@ -1,127 +1,137 @@
-# dgraph2 — Rewrite Status
+# dgraph2 — Working Lightweight Graph Database
 
-dgraph2 is a strip-down of upstream Dgraph (`priorart/dgraph/`, gitignored)
-into a lightweight, local-only graph database. The plan that drives the work
-lives at `~/.claude/plans/plan-to-rewrite-priorart-dgraph-elegant-corbato.md`.
+`dgraph2` is a single-node, embeddable fork of upstream Dgraph
+(`priorart/dgraph/`, gitignored) with the cluster machinery (Zero, Raft,
+inter-alpha gRPC, group sharding, distributed Oracle, ACL, multi-tenancy,
+at-rest encryption, Vault) removed. The DQL parser, posting store, schema,
+indexing and worker query-execution engine are all preserved.
 
 ## What works today
-
-`make all` builds the binary, passes `go vet`, and runs the e2e tests:
 
 ```
 $ make all
 go vet ./pkg/dgraph2/... ./cmd/dgraph2-server/... ./worker/...
 go build  ./cmd/dgraph2-server
 go test  -count=1 ./pkg/dgraph2/... ./cmd/dgraph2-server/...
-ok  	github.com/qiangli/dgraph2/pkg/dgraph2	1.012s
-ok  	github.com/qiangli/dgraph2/cmd/dgraph2-server	0.773s
+ok    github.com/qiangli/dgraph2/pkg/dgraph2          2.570s
+ok    github.com/qiangli/dgraph2/cmd/dgraph2-server   0.765s
 ```
 
 `go build ./...` is clean across the whole tree.
 
-### Phase 0 — Copy and prune dead packages: DONE
-- Tree copied from `priorart/dgraph/` to repo root.
-- Module renamed `github.com/dgraph-io/dgraph/v25` → `github.com/qiangli/dgraph2`.
-- Deleted: `raftwal/`, `xidmap/`, `acl/`, `audit/`, `enc/`, `ocagent/`, `conn/`,
-  the entire `dgraph/cmd/{zero,cert,decrypt,dgraphimport,migrate,conv,mcp,debuginfo,increment}` set,
-  `dgraph/cmd/debug/wal.go`, `compose/`, `contrib/`, `paper/`, `dgraphtest/`,
-  `dgraphapi/`, `upgrade/`, `check_upgrade/`, `tlstest/`, `systest/`, `t/`,
-  `testutil/`, `filestore/`, `backup/`, `graphql/`, `edgraph/`, ACL/multi-tenancy
-  files, vault/JWT helpers, and ACL-only tests across packages.
+### End-to-end capabilities
 
-### Phase 1 — Cluster touchpoints stubbed: DONE
-- `x/namespace_stub.go` replaces the deleted JWT helpers with always-namespace-0
-  stubs.
-- `worker/worker.go` (~150 LOC) provides the API surface `posting/` and `query/`
-  import: `MutateOverNetwork`, `ProcessTaskOverNetwork`, `SortOverNetwork`,
-  `AssignUidsOverNetwork` (real local counter), `GetSchemaOverNetwork` (real,
-  reads schema state), `GetTypes` (real), `Init`, `StartRaftNodes`, `MaxLeaseId`,
-  `LimitDefaults`, `ErrNonExistentTabletMessage`.
-- `query/outputnode_graphql.go` deleted; `query/outputnode.go` now serializes
-  in DQL form only (the upstream GraphQL output path went through a 50+ method
-  `gqlSchema.Field` interface from the deleted `graphql/schema` package).
-- `MutateOverNetwork`, `ProcessTaskOverNetwork`, `SortOverNetwork` return
-  `ErrNotImplemented`; the demo path goes through `pkg/dgraph2.Set/Get`
-  directly against the posting store.
+The following all work, demonstrated by e2e tests in
+`pkg/dgraph2/db_test.go` and `cmd/dgraph2-server/e2e_test.go`:
 
-### Phase 2 — Thin server `cmd/dgraph2-server`: DONE
-- HTTP endpoints: `/health`, `/alter`, `/set`, `/get`, `/assign`,
-  `/admin/backup`, `/admin/restore`.
-- Graceful shutdown on SIGINT/SIGTERM.
-- E2E test in `cmd/dgraph2-server/e2e_test.go`: drives the full HTTP surface
-  via `httptest`.
+| Feature                        | Test                          | Detail                                        |
+|-------------------------------|------------------------------|----------------------------------------------|
+| Open / Close                   | `TestOpenClose`               | Clean lifecycle, idempotent Close            |
+| Schema persistence             | `TestAlterAndReopen`          | Alter survives Close + Open                  |
+| Set / Get scalar triples       | `TestSetGetRoundtrip`         | Direct posting writes                        |
+| Persistent timestamp + UID     | `TestPersistsAcrossReopen`    | Counters resumed from `pstore.MaxVersion`    |
+| RDF batch ingest               | `TestMutateRDF`               | `_:blank` substitution → fresh UIDs           |
+| DQL `eq()` over indexed pred   | `TestDQLQuery`                | `{"q":[{"uid":"0x1","name":"Alice","age":30}]}` |
+| DQL `ge()`, `has()`            | `TestDQLFilters`              | Inequality + presence filters                |
+| Pagination                     | `TestDQLPagination`           | `first: N` at root                           |
+| RDF delete                     | `TestDQLDeleteRoundtrip`      | DelNquads round-trips                        |
+| Multi-hop traversal            | `TestDQLEdgeTraversal`        | `friend { name }` expands edges              |
+| `count(predicate)`             | `TestDQLCount`                | `@count` directive + count() function        |
+| Index rebuild on Alter         | `TestAlterRebuildsIndex`      | Add `@index` after data → query still works  |
+| Full DQL persist               | `TestDQLPersistsAcrossReopen` | Mutate + Query survive restart               |
+| Backup / restore (DQL)         | `TestDQLBackupRestoreRoundtrip`| Stream-based backup → fresh DB → query        |
+| HTTP `/query`, `/mutate`       | `TestServerHTTP`              | curl-able HTTP surface                       |
 
-### Phase 3 — Library API `pkg/dgraph2`: DONE
-- `Open(Options) (*DB, error)` — opens Badger in managed mode, wires the
-  worker and posting layers, applies the reserved schema, and refreshes
-  the schema cache from disk.
-- `(*DB) Close() error` — idempotent.
-- `(*DB) Alter(ctx, schemaText) error` — parses DQL schema and persists each
-  predicate/type to the schema state and Badger.
-- `(*DB) AssignUid(ctx, n) (start, end uint64, error)` — local atomic UID
-  counter that replaces the upstream xidmap.
-- `(*DB) Set(ctx, subject, predicate, value) error` — round-trips a triple
-  through `posting.NewTxn` → `pl.AddMutationWithIndex` → `txn.Update` →
-  `txn.CommitToDisk` → `posting.Oracle().ProcessDelta`.
-- `(*DB) Get(ctx, subject, predicate) ([]byte, error)` — reads the latest
-  scalar value at the local timestamp via `posting.GetNoStore` + `pl.Value`.
-- 7 unit tests; all pass.
-
-### Phase 4 — Single-node backup/restore: DONE
-- `(*DB) Backup(ctx, dst)` uses `pstore.NewStreamAt(currentTs).Backup` —
-  the managed-mode equivalent of the upstream group-coordinated backup,
-  collapsed to a single Badger snapshot.
-- `(*DB) RestoreFrom(ctx, src)` uses `pstore.Load`, then advances the local
-  timestamp counter past `pstore.MaxVersion()` and refreshes the schema
-  cache so subsequent reads see the restored data.
-- E2E covered by `TestBackupRestore`.
-
-### Phase 5 — GraphQL admin trim: SKIPPED
-- The entire `graphql/` tree was deleted in P1 (it transitively depended on
-  the deleted ACL/multi-tenancy types). Bringing it back as a minimal
-  trimmed package is the natural next step but is out of scope for the
-  current pass.
-
-### Phase 6 — Build / test scaffolding + e2e smoke tests: DONE
-- `Makefile` with `build`, `test`, `vet`, `all`, `clean` targets.
-- `vet` is scoped to the new/rewritten packages because the upstream proto
-  types embed `sync.Mutex` via `MessageState`, which the standard `go vet`
-  copylocks check flags pervasively in priorart code.
-- 8 e2e tests across `pkg/dgraph2` and `cmd/dgraph2-server`.
-
-## Honest limitations
-
-- **The full DQL query/mutation engine is not yet wired up.** Upstream's
-  `worker/task.go` (~2,600 LOC) and the surrounding `mutation.go`,
-  `groups.go`, and `draft.go` files were deleted; only the API surface
-  remains as `ErrNotImplemented` stubs. The library demos the architecture
-  via direct `Set/Get` against the posting store.
-- **No GraphQL endpoint.** `graphql/` is gone; restoring a trimmed version
-  is the obvious next step.
-- **No bulk/live loaders.** `dgraph/cmd/{bulk,live}` were deleted because
-  they imported the deleted `xidmap` and `enc` packages.
-- **No ACL, audit, multi-tenancy, encryption-at-rest, vault.** These were
-  intentional deletions per the user-confirmed scope.
-
-## Layout
+### Architecture
 
 ```
 .
-├── Makefile
-├── REWRITE_STATUS.md
-├── cmd/dgraph2-server/        # thin HTTP server wrapping pkg/dgraph2
-├── pkg/dgraph2/               # public Go API: Open, Alter, Set, Get, Backup, ...
-├── worker/                    # stub façade exposing the symbols posting/query import
-├── posting/  query/  schema/  dql/  types/  tok/  algo/  codec/  lex/  x/  protos/  task/
-│                              # core upstream packages, kept and patched
-└── priorart/dgraph/           # gitignored reference copy of upstream Dgraph
+├── Makefile                     # build / test / vet / all / clean
+├── cmd/dgraph2-server/          # HTTP server: /query /mutate /alter /admin/backup
+├── pkg/dgraph2/                 # Go API: Open Close Alter Mutate Query Set Get Backup RestoreFrom
+├── worker/                      # ported from priorart, cluster paths stripped:
+│                                #   mutation.go (runMutation, MutateOverNetwork)
+│                                #   task.go     (processTask, ProcessTaskOverNetwork)
+│                                #   sort.go     (SortOverNetwork)
+│                                #   match,compare,stringfilter,trigram,aggregator,tokens
+├── posting/  schema/  dql/  query/  types/  tok/  algo/  codec/  lex/  x/  protos/  task/
+│                                # core upstream packages, kept and patched
+└── priorart/dgraph/             # gitignored reference copy of upstream Dgraph
 ```
 
-## How to resume
+## How the rewrite landed
 
-The next step is to port `worker/task.go` and `worker/mutation.go` from
-`priorart/dgraph/` with the cluster forwarding branches stripped, so that
-`worker.MutateOverNetwork` and `worker.ProcessTaskOverNetwork` execute real
-DQL queries instead of returning `ErrNotImplemented`. Once those land, the
-library can grow `Query(dql)` and `Mutate(rdf)` methods and the server can
-register the upstream `api.DgraphServer` gRPC interface.
+### Tier 1 — done
+
+* **#5/#6 Persistent counters**: timestamps resume from
+  `pstore.MaxVersion()`, UID counter resumes from a reserved
+  `__dgraph2_max_uid` Badger key. Single atomic `worker.localTs` is the
+  process-wide source of truth; both `pkg/dgraph2.DB.tsCount` and
+  `worker.NextTs` advance it. Calling `posting.Oracle.ProcessDelta`
+  concurrently triggers an `AssertTrue` panic, so we never call it from
+  multiple paths.
+* **#1 Real `MutateOverNetwork`**: ~230 LOC in `worker/mutation.go`
+  ported from priorart. Walks `pb.Mutations.Edges`, type-checks via
+  `ValidateAndConvert`, applies through `posting.Txn.AddMutationWithIndex`
+  → `CommitToDisk`. No Raft proposal; a process-wide lock serialises.
+* **#2 `ProcessTaskOverNetwork`**: full ~2,800 LOC `worker/task.go`
+  ported. Cluster forwarding paths
+  (`invokeNetworkRequest`/`processWithBackupRequest`/group routing /
+  `grpcWorker.ServeTask`) excised. The local executor that powers
+  `eq`/`ge`/`le`/`has`/`uid`/sort/count/regex is kept verbatim.
+* **#3 `SortOverNetwork`**: trivial wrapper over `processSort`.
+* **#4 RDF Mutate**: `pkg/dgraph2.DB.Mutate` parses
+  SetNquads/DelNquads via `chunker.ParseRDFs`, substitutes blank nodes
+  with fresh UIDs, tags Set/Del, routes through `MutateOverNetwork`.
+
+### Tier 2 — done
+
+* **#7 DQL Query**: `pkg/dgraph2.DB.Query` parses through `dql.Parse`,
+  builds `query.Request`, runs `ProcessQuery`, marshals via
+  `query.ToJson`. `cmd/dgraph2-server` exposes `/query` and `/mutate`.
+* **#8 HTTP** (gRPC was originally planned via `api.DgraphServer`; the
+  HTTP surface is the actual interface for now — the same gRPC types are
+  reused on the wire so dgo clients can be wired later trivially).
+* **#9 Indexing on Alter**: `Alter` snapshots the old schema, applies
+  the new, and calls `posting.IndexRebuild.{DropIndexes,BuildIndexes}`
+  when directives change. Verified by `TestAlterRebuildsIndex`.
+
+### Tier 3 — partial
+
+* **#11 Bulk + live loaders** — deferred. The upstream `dgraph/cmd/bulk`
+  and `dgraph/cmd/live` were deleted in P0 because they imported the
+  removed `xidmap` and `enc` packages. Bringing them back wired to
+  `worker.AssignUidsOverNetwork` is straightforward but untouched.
+* **#12 Backup format compat** — current backup is single-file
+  Badger Stream output. The upstream multi-file manifest format is not
+  produced.
+* **#10 GraphQL** — deferred. The 60K+ LOC `graphql/` tree is gone.
+
+### Tier 4 — partial
+
+* **#13 WaitForTs deadlock audit** — fixed. The unified counter and the
+  removal of the racy `nextLocalTs` loop closed the deadlock paths.
+* **#14 Run upstream tests** — not done. `query/query{1,2}_test.go` and
+  similar were left in but rely on cluster fixtures; they're still in
+  the tree but not part of `make test`.
+* **#15 Health / metrics** — `/health` works; Prometheus metrics
+  collectors are linked but not exposed.
+
+## Honest open work
+
+If you keep going, in rough priority:
+
+1. **Bulk loader** — port `dgraph/cmd/bulk` from priorart, swapping
+   `xidmap` for `worker.AssignUidsOverNetwork`. Lets users ingest
+   multi-GB RDF dumps without the streaming Mutate path.
+2. **gRPC `api.DgraphServer`** — register the auto-generated server in
+   `cmd/dgraph2-server`. Existing dgo clients connect unchanged.
+3. **GraphQL** — restore the trimmed `graphql/` tree (admin endpoints
+   without ACL/namespace SDL fragments). Largest remaining piece of
+   upstream code that's currently absent.
+4. **Run the kept upstream tests** — `posting/list_test.go`,
+   `query/query{1,2}_test.go`, `schema/schema_test.go`. Most should
+   pass with minor fixture surgery now that the engine is back.
+5. **Schema GraphQL `@auth`** is currently a no-op since ACL is gone;
+   if you bring auth back you will need to put the directive evaluator
+   back too.

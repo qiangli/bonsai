@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -575,6 +576,119 @@ func TestDQLCount(t *testing.T) {
 	}
 	if !strings.Contains(string(r.Json), `"count(friend)":2`) {
 		t.Errorf("count(friend) wrong: %s", string(r.Json))
+	}
+}
+
+// TestDQLPersistsAcrossReopen mutates a graph, closes, reopens, and queries.
+// Exercises the full pipeline (Mutate via worker, Query via task) survives
+// a round-trip through Badger.
+func TestDQLPersistsAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	{
+		db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("Open 1: %v", err)
+		}
+		if err := db.Alter(ctx,
+			"name: string @index(exact) .\nfriend: [uid] .\n"); err != nil {
+			t.Fatalf("Alter: %v", err)
+		}
+		if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+			_:alice <name>   "Alice" .
+			_:bob   <name>   "Bob" .
+			_:alice <friend> _:bob .
+		`)}); err != nil {
+			t.Fatalf("Mutate: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}
+
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open 2: %v", err)
+	}
+	defer db.Close()
+
+	r, err := db.Query(ctx, `{
+		q(func: eq(name, "Alice")) {
+			name
+			friend { name }
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("Query after reopen: %v", err)
+	}
+	if !strings.Contains(string(r.Json), `"name":"Alice"`) ||
+		!strings.Contains(string(r.Json), `"name":"Bob"`) {
+		t.Errorf("post-reopen traversal lost data: %s", string(r.Json))
+	}
+}
+
+// TestDQLBackupRestoreRoundtrip backs up a graph, opens a fresh DB at a
+// different directory, restores into it, and runs the same DQL query that
+// the source DB answered.
+func TestDQLBackupRestoreRoundtrip(t *testing.T) {
+	src := t.TempDir()
+	dst := t.TempDir()
+	backup := src + "/backup.bin"
+	ctx := context.Background()
+
+	var r1Uid uint64
+	{
+		db, err := dgraph2.Open(dgraph2.Options{Dir: src})
+		if err != nil {
+			t.Fatalf("Open src: %v", err)
+		}
+		if err := db.Alter(ctx, "name: string @index(exact) .\n"); err != nil {
+			t.Fatalf("Alter: %v", err)
+		}
+		resp, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+			_:r1 <name> "Restored1" .
+			_:r2 <name> "Restored2" .
+		`)})
+		if err != nil {
+			t.Fatalf("Mutate: %v", err)
+		}
+		if _, err := fmt.Sscanf(resp.Uids["r1"], "0x%x", &r1Uid); err != nil {
+			t.Fatalf("parse uid: %v", err)
+		}
+		if err := db.Backup(ctx, backup); err != nil {
+			t.Fatalf("Backup: %v", err)
+		}
+		fi, _ := os.Stat(backup)
+		t.Logf("backup file size: %d bytes", fi.Size())
+		_ = db.Close()
+	}
+
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dst})
+	if err != nil {
+		t.Fatalf("Open dst: %v", err)
+	}
+	defer db.Close()
+	if err := db.RestoreFrom(ctx, backup); err != nil {
+		t.Fatalf("RestoreFrom: %v", err)
+	}
+
+	// Direct read by the restored uid — proves the data keys survived.
+	t.Logf("r1 uid=%d", r1Uid)
+	v, err := db.Get(ctx, r1Uid, "name")
+	if err != nil {
+		t.Fatalf("Get post-restore (uid=%d): %v", r1Uid, err)
+	}
+	if string(v) != "Restored1" {
+		t.Errorf("Get post-restore: want Restored1, got %q", string(v))
+	}
+
+	r, err := db.Query(ctx, `{ q(func: eq(name, "Restored1")) { name } }`)
+	if err != nil {
+		t.Fatalf("Query post-restore: %v", err)
+	}
+	if !strings.Contains(string(r.Json), `"name":"Restored1"`) {
+		t.Errorf("restore lost data: %s", string(r.Json))
 	}
 }
 
