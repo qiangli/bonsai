@@ -212,13 +212,7 @@ func TestFeatureCascade(t *testing.T) {
 }
 
 // @recurse follows the same predicate to a depth.
-//
-// Skipped: needs further investigation. Recurse machinery is in
-// query/recurse.go but the test query doesn't return ancestors as
-// expected. Could be DQL syntax or a wiring issue. Documented as
-// open work in REWRITE_STATUS.md.
 func TestFeatureRecurse(t *testing.T) {
-	t.Skip("@recurse semantics need investigation")
 	db := newDB(t)
 	mustAlter(t, db, "name: string @index(exact) .\nparent: [uid] .\n")
 	mustMutate(t, db, `
@@ -241,35 +235,44 @@ func TestFeatureRecurse(t *testing.T) {
 	}
 }
 
-// @groupby
-//
-// Skipped: DQL @groupby syntax needs the var(...) → uid(c) → val(c)
-// chain done a particular way; failing the engine vs failing the query
-// is non-trivial to disambiguate in a smoke test. Engine support is in
-// worker/aggregator.go. Open work documented in REWRITE_STATUS.md.
+// @groupby — must group by a UID-typed edge when using `as` var assignment
+// (string-typed groupby works too, but does not support the var chain that
+// lets a follow-up block reference the group via uid()/val()).
 func TestFeatureGroupBy(t *testing.T) {
-	t.Skip("@groupby requires var-chain syntax outside the smoke-test scope")
 	db := newDB(t)
-	mustAlter(t, db, "name: string @index(exact) .\ncity: string @index(exact) .\n")
-	mustMutate(t, db, `
-		_:a <name> "A" .
-		_:a <city> "NYC" .
-		_:b <name> "B" .
-		_:b <city> "NYC" .
-		_:c <name> "C" .
-		_:c <city> "LA"  .
+	mustAlter(t, db, `
+		name:     string @index(exact) .
+		livesIn:  [uid] .
+		cityName: string @index(exact) .
 	`)
+	resp := mustMutate(t, db, `
+		_:nyc <cityName> "NYC" .
+		_:la  <cityName> "LA"  .
+		_:a   <name>    "A" .
+		_:a   <livesIn> _:nyc .
+		_:b   <name>    "B" .
+		_:b   <livesIn> _:nyc .
+		_:c   <name>    "C" .
+		_:c   <livesIn> _:la .
+	`)
+	if resp.Uids["nyc"] == "" || resp.Uids["la"] == "" {
+		t.Fatalf("missing city uids: %v", resp.Uids)
+	}
 	got := mustQuery(t, db, `{
-		var(func: has(name)) @groupby(city) {
-			c as count(uid)
+		var(func: has(name)) @groupby(livesIn) {
+			a as count(uid)
 		}
-		groups(func: uid(c), orderdesc: val(c)) {
-			city
-			total: val(c)
+		groups(func: uid(a), orderdesc: val(a)) {
+			cityName
+			pop: val(a)
 		}
 	}`)
 	if !strings.Contains(got, "NYC") || !strings.Contains(got, "LA") {
 		t.Errorf("groupby missing cities: %s", got)
+	}
+	// NYC has 2 residents, LA has 1.
+	if !strings.Contains(got, `"pop":2`) || !strings.Contains(got, `"pop":1`) {
+		t.Errorf("groupby counts wrong: %s", got)
 	}
 }
 
@@ -378,5 +381,141 @@ func TestFeatureOrder(t *testing.T) {
 	posA := strings.Index(got, `"name":"A"`)
 	if !(posB < posC && posC < posA) {
 		t.Errorf("orderasc wrong: %s", got)
+	}
+}
+
+// match(pred, value, distance) — fuzzy match over a trigram index.
+func TestFeatureMatch(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(trigram) .\n")
+	mustMutate(t, db, `
+		_:a <name> "Alexander" .
+		_:b <name> "Alexandra" .
+		_:c <name> "Bob" .
+	`)
+	got := mustQuery(t, db, `{ q(func: match(name, "Alexandr", 2)) { name } }`)
+	if !strings.Contains(got, "Alexander") || !strings.Contains(got, "Alexandra") {
+		t.Errorf("match missed near matches: %s", got)
+	}
+	if strings.Contains(got, `"name":"Bob"`) {
+		t.Errorf("match returned distant value: %s", got)
+	}
+}
+
+// expand(_all_) — expand every predicate of a node without naming each one.
+// Requires a type definition for the node (DQL spec: expand walks the type's
+// predicate list).
+func TestFeatureExpandAll(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, `
+		name: string @index(exact) .
+		age:  int    .
+		type Person {
+			name
+			age
+		}
+	`)
+	mustMutate(t, db, `
+		_:a <name> "Alice" .
+		_:a <age>  "30"^^<xs:int> .
+		_:a <dgraph.type> "Person" .
+	`)
+	got := mustQuery(t, db, `{ q(func: eq(name, "Alice")) { expand(_all_) } }`)
+	if !strings.Contains(got, "Alice") {
+		t.Errorf("expand(_all_) missed name: %s", got)
+	}
+	if !strings.Contains(got, "30") {
+		t.Errorf("expand(_all_) missed age: %s", got)
+	}
+}
+
+// shortest path between two named nodes via a uid-list predicate.
+// DQL syntax: a top-level `shortest(from: <uid>, to: <uid>)` block plus a
+// follow-up `path(func: uid(_path_))` to materialise the result.
+func TestFeatureShortest(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(exact) .\nfriend: [uid] .\n")
+	resp := mustMutate(t, db, `
+		_:a <name>   "A" .
+		_:b <name>   "B" .
+		_:c <name>   "C" .
+		_:d <name>   "D" .
+		_:a <friend> _:b .
+		_:b <friend> _:c .
+		_:c <friend> _:d .
+		_:a <friend> _:d .
+	`)
+	a, d := resp.Uids["a"], resp.Uids["d"]
+	if a == "" || d == "" {
+		t.Fatalf("missing uids: %v", resp.Uids)
+	}
+	q := `{
+		path as shortest(from: ` + a + `, to: ` + d + `) {
+			friend
+		}
+		path(func: uid(path)) { name }
+	}`
+	got := mustQuery(t, db, q)
+	// The 1-hop A→D edge should win over A→B→C→D.
+	if !strings.Contains(got, `"name":"A"`) || !strings.Contains(got, `"name":"D"`) {
+		t.Errorf("shortest path missed endpoints: %s", got)
+	}
+	if strings.Contains(got, `"name":"B"`) || strings.Contains(got, `"name":"C"`) {
+		t.Errorf("shortest path took the long route: %s", got)
+	}
+}
+
+// near(geo, [lng, lat], distance) over a geo index.
+func TestFeatureGeoNear(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(exact) .\nloc: geo @index(geo) .\n")
+	// Two NYC-ish points and one in LA.
+	mustMutate(t, db, `
+		_:a <name> "TimesSquare" .
+		_:a <loc>  "{\"type\":\"Point\",\"coordinates\":[-73.9857,40.7580]}"^^<geo:geojson> .
+		_:b <name> "EmpireState" .
+		_:b <loc>  "{\"type\":\"Point\",\"coordinates\":[-73.9857,40.7484]}"^^<geo:geojson> .
+		_:c <name> "LAX" .
+		_:c <loc>  "{\"type\":\"Point\",\"coordinates\":[-118.4081,33.9425]}"^^<geo:geojson> .
+	`)
+	// 5km radius around Times Square — should include EmpireState, exclude LAX.
+	got := mustQuery(t, db, `{
+		q(func: near(loc, [-73.9857, 40.7580], 5000)) { name }
+	}`)
+	if !strings.Contains(got, "TimesSquare") || !strings.Contains(got, "EmpireState") {
+		t.Errorf("near() missed nearby points: %s", got)
+	}
+	if strings.Contains(got, "LAX") {
+		t.Errorf("near() returned far point: %s", got)
+	}
+}
+
+// math() expressions over val() variables.
+func TestFeatureMath(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(exact) .\nprice: float .\n")
+	mustMutate(t, db, `
+		_:a <name>  "Widget" .
+		_:a <price> "10.0"^^<xs:float> .
+		_:b <name>  "Gadget" .
+		_:b <price> "20.0"^^<xs:float> .
+	`)
+	got := mustQuery(t, db, `{
+		var(func: has(price)) {
+			p as price
+			doubled as math(p * 2)
+		}
+		q(func: uid(p), orderasc: name) {
+			name
+			price
+			d: val(doubled)
+		}
+	}`)
+	// Doubled values should appear: 20 and 40.
+	if !strings.Contains(got, "Widget") || !strings.Contains(got, "Gadget") {
+		t.Errorf("math() result missing nodes: %s", got)
+	}
+	if !strings.Contains(got, "20") || !strings.Contains(got, "40") {
+		t.Errorf("math() didn't double the values: %s", got)
 	}
 }

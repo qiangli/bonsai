@@ -103,6 +103,25 @@ func Open(opts Options) (*DB, error) {
 		x.WorkerConfig.TmpDir = os.TempDir()
 	}
 
+	// x.Config is a process-global with zero defaults. The query engine
+	// treats "0" as a hard limit (e.g. shortest/recurse abort with "Exceeded
+	// query edge limit = 0"), so seed sensible values matching upstream.
+	if x.Config.LimitQueryEdge == 0 {
+		x.Config.LimitQueryEdge = 1e6
+	}
+	if x.Config.LimitMutationsNquad == 0 {
+		x.Config.LimitMutationsNquad = 1e6
+	}
+	if x.Config.LimitNormalizeNode == 0 {
+		x.Config.LimitNormalizeNode = 1e4
+	}
+	if x.Config.QueryTimeout == 0 {
+		x.Config.QueryTimeout = 60 * time.Second
+	}
+	if x.Config.MaxRetries == 0 {
+		x.Config.MaxRetries = -1
+	}
+
 	worker.Init(ps)
 	posting.Init(ps, opts.CacheMB<<20, false /* removeOnUpdate */)
 	schema.Init(ps)

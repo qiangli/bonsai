@@ -2,17 +2,21 @@
  * SPDX-FileCopyrightText: dgraph2 contributors
  * SPDX-License-Identifier: Apache-2.0
  *
- * dgraph2-cli — minimal command-line client wrapping the gRPC api.DgraphServer.
+ * dgraph2-cli — minimal command-line client.
  *
- * Subcommands:
+ * Subcommands using the gRPC api.DgraphServer:
  *   alter <schemaText>          — apply schema
  *   query <dql>                 — run a DQL query, print JSON
  *   mutate <rdf>                — set N-Quads via SetNquads
  *   drop-all                    — wipe the database
  *   drop-data                   — wipe data, keep schema
  *
- * The client is stateless and reconnects per invocation; intended for
- * scripts and ad-hoc poking, not high-throughput workloads (use dgo for that).
+ * Subcommands using the HTTP /admin/* surface (admin ops are HTTP-only):
+ *   backup <dst>                — POST /admin/backup?path=<dst>
+ *   restore <src>               — POST /admin/restore?path=<src>
+ *   export <fmt> <dst>          — POST /admin/export?format=<rdf|json>&path=<dst>
+ *
+ * The client is stateless and reconnects per invocation.
  */
 package main
 
@@ -22,6 +26,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -33,6 +39,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:9080", "gRPC server address")
+	httpAddr := flag.String("http", "http://127.0.0.1:8080", "HTTP base URL (used for backup/restore/export)")
 	timeout := flag.Duration("timeout", 30*time.Second, "request timeout")
 	flag.Parse()
 	args := flag.Args()
@@ -40,16 +47,26 @@ func main() {
 		usage()
 	}
 
-	conn, err := grpc.NewClient(*addr,
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+
+	switch args[0] {
+	case "backup", "restore", "export":
+		runHTTP(ctx, *httpAddr, args)
+	default:
+		runGRPC(ctx, *addr, args)
+	}
+}
+
+func runGRPC(ctx context.Context, addr string, args []string) {
+	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("dial %s: %v", *addr, err)
+		log.Fatalf("dial %s: %v", addr, err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	dg := dgo.NewDgraphClient(api.NewDgraphClient(conn))
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
 
 	switch args[0] {
 	case "alter":
@@ -108,14 +125,65 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, `usage: dgraph2-cli [--addr 127.0.0.1:9080] <command> [args]
+func runHTTP(ctx context.Context, base string, args []string) {
+	switch args[0] {
+	case "backup":
+		if len(args) < 2 {
+			log.Fatalf("backup: destination path required")
+		}
+		postAdmin(ctx, base, "/admin/backup", url.Values{"path": {args[1]}})
 
-commands:
-  alter <schema>      apply a DQL schema
-  query <dql>         run a DQL query (or read from stdin)
-  mutate <rdf>        apply RDF triples (SetNquads, or read from stdin)
-  drop-all            wipe the database
-  drop-data           wipe data only (keep schema)`)
+	case "restore":
+		if len(args) < 2 {
+			log.Fatalf("restore: source path required")
+		}
+		postAdmin(ctx, base, "/admin/restore", url.Values{"path": {args[1]}})
+
+	case "export":
+		if len(args) < 3 {
+			log.Fatalf("export: format and destination path required (e.g. export rdf /tmp/out.rdf)")
+		}
+		postAdmin(ctx, base, "/admin/export", url.Values{
+			"format": {args[1]},
+			"path":   {args[2]},
+		})
+	}
+}
+
+func postAdmin(ctx context.Context, base, path string, q url.Values) {
+	endpoint := base + path + "?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		log.Fatalf("build request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatalf("%s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		log.Fatalf("%s: %s: %s", path, resp.Status, string(body))
+	}
+	_, _ = os.Stdout.Write(body)
+	if len(body) > 0 && body[len(body)-1] != '\n' {
+		fmt.Println()
+	}
+}
+
+func usage() {
+	fmt.Fprintln(os.Stderr, `usage: dgraph2-cli [--addr 127.0.0.1:9080] [--http http://127.0.0.1:8080] <command> [args]
+
+gRPC commands:
+  alter <schema>           apply a DQL schema
+  query <dql>              run a DQL query (or read from stdin)
+  mutate <rdf>             apply RDF triples (SetNquads, or read from stdin)
+  drop-all                 wipe the database
+  drop-data                wipe data only (keep schema)
+
+HTTP /admin commands:
+  backup <dst>             write a Badger-stream backup to <dst>
+  restore <src>            restore a Badger-stream backup from <src>
+  export <fmt> <dst>       export the database; fmt is rdf or json`)
 	os.Exit(2)
 }
