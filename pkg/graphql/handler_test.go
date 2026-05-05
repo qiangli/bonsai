@@ -119,6 +119,82 @@ func TestGraphQLNestedSelection(t *testing.T) {
 	}
 }
 
+// TestGraphQLUpdateAndDelete exercises the update<Type> and delete<Type>
+// mutation paths via filter → DQL UID resolution.
+func TestGraphQLUpdateAndDelete(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	if err := db.Alter(ctx, `
+		name: string @index(exact) .
+		age:  int    .
+		type Person {
+			name
+			age
+		}
+	`); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+	for _, name := range []string{"Alice", "Bob", "Carol"} {
+		r := graphql.Execute(ctx, db, &graphql.Request{
+			Query: `mutation ($n: String!) { addPerson(input: {name: $n, age: 30}) { uid } }`,
+			Variables: map[string]any{"n": name},
+		})
+		if len(r.Errors) > 0 {
+			t.Fatalf("addPerson(%s): %+v", name, r.Errors)
+		}
+	}
+
+	// Update via filter.eq: bump Alice's age to 31.
+	upd := graphql.Execute(ctx, db, &graphql.Request{
+		Query: `mutation {
+			updatePerson(
+				filter: {eq: {predicate: "name", value: "Alice"}}
+				set:    {age: 31}
+			) { uids count }
+		}`,
+	})
+	if len(upd.Errors) > 0 {
+		t.Fatalf("updatePerson: %+v", upd.Errors)
+	}
+	updBody, _ := json.Marshal(upd.Data["updatePerson"])
+	if !strings.Contains(string(updBody), `"count":1`) {
+		t.Errorf("update count != 1: %s", updBody)
+	}
+
+	// Verify the update landed.
+	q := graphql.Execute(ctx, db, &graphql.Request{
+		Query: `{ queryPerson { name age } }`,
+	})
+	body, _ := json.Marshal(q.Data["queryPerson"])
+	if !strings.Contains(string(body), `"name":"Alice","age":31`) &&
+		!strings.Contains(string(body), `"age":31,"name":"Alice"`) {
+		t.Errorf("Alice's age not updated to 31: %s", body)
+	}
+
+	// Delete Bob.
+	del := graphql.Execute(ctx, db, &graphql.Request{
+		Query: `mutation {
+			deletePerson(filter: {eq: {predicate: "name", value: "Bob"}}) { count }
+		}`,
+	})
+	if len(del.Errors) > 0 {
+		t.Fatalf("deletePerson: %+v", del.Errors)
+	}
+
+	q2 := graphql.Execute(ctx, db, &graphql.Request{
+		Query: `{ queryPerson { name } }`,
+	})
+	body2, _ := json.Marshal(q2.Data["queryPerson"])
+	if strings.Contains(string(body2), `"Bob"`) {
+		t.Errorf("Bob still present after delete: %s", body2)
+	}
+	for _, want := range []string{`"Alice"`, `"Carol"`} {
+		if !strings.Contains(string(body2), want) {
+			t.Errorf("delete blew away %s: %s", want, body2)
+		}
+	}
+}
+
 // TestGraphQLSyntaxError ensures parse failures come back as GraphQL-shape
 // errors rather than a panic or 500.
 func TestGraphQLSyntaxError(t *testing.T) {

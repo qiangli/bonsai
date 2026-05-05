@@ -56,6 +56,8 @@ import (
 	"github.com/dgraph-io/gqlparser/v2/parser"
 
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
+	"github.com/qiangli/dgraph2/protos/pb"
+	"github.com/qiangli/dgraph2/schema"
 )
 
 // Request is the standard GraphQL POST body.
@@ -143,4 +145,23 @@ func writeError(w http.ResponseWriter, status int, err error) {
 // asMutation builds a *api.Mutation from raw RDF text.
 func asMutation(rdf string) *api.Mutation {
 	return &api.Mutation{SetNquads: []byte(rdf)}
+}
+
+// newApiMutation returns an empty *api.Mutation. Wrapped so the translator
+// doesn't have to import the api package directly.
+func newApiMutation() *api.Mutation { return &api.Mutation{} }
+
+// dgraphSchemaType looks up a type definition in the process-global schema
+// state. Wrapped here so the translator can stay in its own package.
+func dgraphSchemaType(name string) (pb.TypeUpdate, bool) {
+	return schema.State().GetType(name)
+}
+
+// splitNamespacedAttr strips the 8-byte namespace prefix that dgraph2
+// prepends to every predicate name. The translator wants the bare predicate.
+func splitNamespacedAttr(p string) (ns []byte, attr string) {
+	if len(p) < 8 {
+		return nil, p
+	}
+	return []byte(p[:8]), p[8:]
 }

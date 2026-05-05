@@ -51,7 +51,7 @@ func main() {
 	defer cancel()
 
 	switch args[0] {
-	case "backup", "restore", "export":
+	case "backup", "restore", "export", "import", "download":
 		runHTTP(ctx, *httpAddr, args)
 	default:
 		runGRPC(ctx, *addr, args)
@@ -127,6 +127,36 @@ func runGRPC(ctx context.Context, addr string, args []string) {
 
 func runHTTP(ctx context.Context, base string, args []string) {
 	switch args[0] {
+	case "import":
+		// import <format> <file>
+		if len(args) < 3 {
+			log.Fatalf("import: format (rdf|json) and file required")
+		}
+		f, err := os.Open(args[2])
+		if err != nil {
+			log.Fatalf("open %s: %v", args[2], err)
+		}
+		defer func() { _ = f.Close() }()
+		postAdminBody(ctx, base, "/admin/import",
+			url.Values{"format": {args[1]}}, f, "application/octet-stream")
+
+	case "download":
+		// download <format> [out-file]   stream /admin/export?download=true
+		if len(args) < 2 {
+			log.Fatalf("download: format (rdf|json) required")
+		}
+		var out *os.File = os.Stdout
+		if len(args) >= 3 {
+			f, err := os.Create(args[2])
+			if err != nil {
+				log.Fatalf("create %s: %v", args[2], err)
+			}
+			defer func() { _ = f.Close() }()
+			out = f
+		}
+		getAdminToWriter(ctx, base, "/admin/export",
+			url.Values{"format": {args[1]}, "download": {"true"}}, out)
+
 	case "backup":
 		// Forms:
 		//   backup <dst>                       single-file stream
@@ -169,8 +199,40 @@ func runHTTP(ctx context.Context, base string, args []string) {
 }
 
 func postAdmin(ctx context.Context, base, path string, q url.Values) {
+	postAdminBody(ctx, base, path, q, nil, "")
+}
+
+// postAdminBody is postAdmin with an optional request body, for endpoints
+// that accept a file upload (e.g. /admin/import).
+func postAdminBody(ctx context.Context, base, path string, q url.Values, body io.Reader, contentType string) {
 	endpoint := base + path + "?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		log.Fatalf("build request: %v", err)
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Fatalf("%s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	rb, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 400 {
+		log.Fatalf("%s: %s: %s", path, resp.Status, string(rb))
+	}
+	_, _ = os.Stdout.Write(rb)
+	if len(rb) > 0 && rb[len(rb)-1] != '\n' {
+		fmt.Println()
+	}
+}
+
+// getAdminToWriter pulls a streaming admin endpoint into out (typically a
+// file or stdout). Used for /admin/export?download=true.
+func getAdminToWriter(ctx context.Context, base, path string, q url.Values, out io.Writer) {
+	endpoint := base + path + "?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		log.Fatalf("build request: %v", err)
 	}
@@ -179,13 +241,12 @@ func postAdmin(ctx context.Context, base, path string, q url.Values) {
 		log.Fatalf("%s: %v", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
 		log.Fatalf("%s: %s: %s", path, resp.Status, string(body))
 	}
-	_, _ = os.Stdout.Write(body)
-	if len(body) > 0 && body[len(body)-1] != '\n' {
-		fmt.Println()
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		log.Fatalf("%s: copy: %v", path, err)
 	}
 }
 
@@ -207,6 +268,8 @@ HTTP /admin commands:
   restore <src>            restore from <src>; if <src> is a directory it is
                            treated as a multi-file manifest backup, otherwise
                            as a Badger-stream backup
-  export <fmt> <dst>       export the database; fmt is rdf or json`)
+  export <fmt> <dst>       export to a server-local path (rdf|json)
+  import <fmt> <file>      upload <file> contents and ingest as RDF or JSON
+  download <fmt> [out]     stream the export back to <out> (default stdout)`)
 	os.Exit(2)
 }

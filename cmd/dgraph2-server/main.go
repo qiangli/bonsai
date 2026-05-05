@@ -159,6 +159,7 @@ func main() {
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 	mux.HandleFunc("/admin/restore", handleRestore(db))
 	mux.HandleFunc("/admin/export", handleExport(db))
+	mux.HandleFunc("/admin/import", handleImport(db))
 	mux.HandleFunc("/admin/schema", handleAdminSchema(db))
 	mux.HandleFunc("/admin/state", handleAdminState(db))
 	mux.HandleFunc("/admin/draining", handleAdminDraining(db, draining))
@@ -460,17 +461,36 @@ func handleBackup(db *dgraph2.DB) http.HandlerFunc {
 	}
 }
 
-// handleExport runs a database export.
-//   POST /admin/export?format=rdf|json&path=/tmp/export.rdf
+// handleExport runs a database export. Two modes:
+//
+//	POST /admin/export?format=rdf|json&path=/tmp/export.rdf    write to a server-local path
+//	GET  /admin/export?format=rdf|json&download=true           stream the dump back in the response body
 func handleExport(db *dgraph2.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		format := r.URL.Query().Get("format")
 		if format == "" {
 			format = "rdf"
 		}
+		download := r.URL.Query().Get("download") == "true" || r.URL.Query().Get("download") == "1"
+		if download {
+			ext := "rdf"
+			ctype := "application/n-quads"
+			if format == "json" {
+				ext = "json"
+				ctype = "application/json"
+			}
+			w.Header().Set("Content-Type", ctype)
+			w.Header().Set("Content-Disposition",
+				fmt.Sprintf(`attachment; filename="dgraph2-export.%s"`, ext))
+			if err := db.ExportTo(r.Context(), format, w); err != nil {
+				// Headers are already sent; best effort error trailer.
+				_, _ = io.WriteString(w, "\n# export error: "+err.Error()+"\n")
+			}
+			return
+		}
 		dst := r.URL.Query().Get("path")
 		if dst == "" {
-			http.Error(w, "path query param required", http.StatusBadRequest)
+			http.Error(w, "path query param required (or set download=true to stream)", http.StatusBadRequest)
 			return
 		}
 		if err := db.Export(r.Context(), format, dst); err != nil {
@@ -478,6 +498,41 @@ func handleExport(db *dgraph2.DB) http.HandlerFunc {
 			return
 		}
 		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	}
+}
+
+// handleImport ingests RDF or JSON streamed in the POST body. Acts like
+// dgraph2-bulk but driven by an HTTP upload — useful for tooling and CI
+// pipelines that have an artifact rather than a server-local path.
+//
+//	POST /admin/import?format=rdf|json[&batch=1000]
+//	  body: contents of the .rdf / .json file (gzip not unwrapped here)
+func handleImport(db *dgraph2.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		format := r.URL.Query().Get("format")
+		if format == "" {
+			format = "rdf"
+		}
+		batch := 1000
+		if v := r.URL.Query().Get("batch"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				http.Error(w, "batch must be a positive integer", http.StatusBadRequest)
+				return
+			}
+			batch = n
+		}
+		summary, err := dgraph2.ImportStream(r.Context(), db, format, r.Body, batch)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(summary)
 	}
 }
 

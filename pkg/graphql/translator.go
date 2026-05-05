@@ -141,22 +141,27 @@ func executeMutation(ctx context.Context, db *dgraph2.DB, op *ast.OperationDefin
 			})
 			continue
 		}
+		var (
+			out map[string]any
+			err error
+		)
 		switch {
 		case strings.HasPrefix(f.Name, "add"):
-			out, err := executeAdd(ctx, db, f, vars)
-			if err != nil {
-				resp.Errors = append(resp.Errors, errorEntry{
-					Message: err.Error(), Path: []any{f.Alias},
-				})
-				continue
-			}
-			resp.Data[f.Alias] = out
+			out, err = executeAdd(ctx, db, f, vars)
+		case strings.HasPrefix(f.Name, "update"):
+			out, err = executeUpdate(ctx, db, f, vars)
+		case strings.HasPrefix(f.Name, "delete"):
+			out, err = executeDelete(ctx, db, f, vars)
 		default:
-			resp.Errors = append(resp.Errors, errorEntry{
-				Message: fmt.Sprintf("unsupported mutation %q (only add<Type> is implemented)", f.Name),
-				Path:    []any{f.Alias},
-			})
+			err = fmt.Errorf("unsupported mutation %q (use add<Type> / update<Type> / delete<Type>)", f.Name)
 		}
+		if err != nil {
+			resp.Errors = append(resp.Errors, errorEntry{
+				Message: err.Error(), Path: []any{f.Alias},
+			})
+			continue
+		}
+		resp.Data[f.Alias] = out
 	}
 	return resp
 }
@@ -191,6 +196,225 @@ func executeAdd(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[stri
 		return nil, fmt.Errorf("%s: %w", f.Name, err)
 	}
 	return map[string]any{"uid": resp.Uids["new"]}, nil
+}
+
+// executeUpdate applies `update<Type>(filter: {...}, set: {k: v, ...},
+// remove: {k: v, ...}) { uids }` against db.Upsert.
+//
+// Supported filter shapes:
+//
+//	{filter: {id: "0x1"}}                                    single-uid lookup
+//	{filter: {ids: ["0x1", "0x2"]}}                          uid set
+//	{filter: {has: "name"}}                                  has(predicate)
+//	{filter: {eq: {predicate: "name", value: "Alice"}}}      eq(predicate, value)
+//
+// We resolve the filter to a DQL query, then issue a Mutate that uses uid(v).
+func executeUpdate(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
+	typ := strings.TrimPrefix(f.Name, "update")
+	if typ == "" {
+		return nil, fmt.Errorf("updateX requires a type name (e.g. updatePerson)")
+	}
+	filterArg := f.Arguments.ForName("filter")
+	if filterArg == nil {
+		return nil, fmt.Errorf("%s: missing filter argument", f.Name)
+	}
+	filterVal, err := evalValue(filterArg.Value, vars)
+	if err != nil {
+		return nil, err
+	}
+	filterObj, ok := filterVal.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s.filter must be an object", f.Name)
+	}
+	rootFn, err := filterToDQL(filterObj)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+
+	// Build the upsert query that binds the matched uids to var `v`.
+	queryDQL := fmt.Sprintf("query { v as var(func: %s) }", rootFn)
+
+	var setRDF, delRDF strings.Builder
+	if a := f.Arguments.ForName("set"); a != nil {
+		val, err := evalValue(a.Value, vars)
+		if err != nil {
+			return nil, err
+		}
+		obj, ok := val.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s.set must be an object", f.Name)
+		}
+		for k, v := range obj {
+			fmt.Fprintf(&setRDF, "uid(v) <%s> %s .\n", k, encodeRDFValue(v))
+		}
+	}
+	if a := f.Arguments.ForName("remove"); a != nil {
+		val, err := evalValue(a.Value, vars)
+		if err != nil {
+			return nil, err
+		}
+		obj, ok := val.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s.remove must be an object", f.Name)
+		}
+		for k, v := range obj {
+			fmt.Fprintf(&delRDF, "uid(v) <%s> %s .\n", k, encodeRDFValue(v))
+		}
+	}
+	if setRDF.Len() == 0 && delRDF.Len() == 0 {
+		return nil, fmt.Errorf("%s: at least one of set / remove is required", f.Name)
+	}
+
+	mut := newApiMutation()
+	mut.SetNquads = []byte(setRDF.String())
+	mut.DelNquads = []byte(delRDF.String())
+	if _, err := db.Upsert(ctx, queryDQL, mut); err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+
+	// Return the resolved uids by re-querying — keeps the response shape
+	// consistent with `delete<Type>` and lets the caller see what changed.
+	return queryFilterUids(ctx, db, rootFn)
+}
+
+// executeDelete applies `delete<Type>(filter: {...}) { uids count }` by
+// resolving the filter to UIDs and then issuing a per-predicate wildcard
+// delete for every field in the type's schema definition. Upstream's
+// `<uid> * * .` form would do the same in one go, but dgraph2's worker
+// requires a known predicate per edge, so we expand explicitly.
+func executeDelete(ctx context.Context, db *dgraph2.DB, f *ast.Field, vars map[string]any) (map[string]any, error) {
+	typeName := strings.TrimPrefix(f.Name, "delete")
+	if typeName == "" {
+		return nil, fmt.Errorf("deleteX requires a type name (e.g. deletePerson)")
+	}
+	filterArg := f.Arguments.ForName("filter")
+	if filterArg == nil {
+		return nil, fmt.Errorf("%s: missing filter argument", f.Name)
+	}
+	filterVal, err := evalValue(filterArg.Value, vars)
+	if err != nil {
+		return nil, err
+	}
+	filterObj, ok := filterVal.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s.filter must be an object", f.Name)
+	}
+	rootFn, err := filterToDQL(filterObj)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+
+	resolved, err := queryFilterUids(ctx, db, rootFn)
+	if err != nil {
+		return nil, err
+	}
+	uids, _ := resolved["uids"].([]string)
+	if len(uids) == 0 {
+		return resolved, nil
+	}
+
+	// Discover the type's predicate list from schema state. If the type is
+	// unknown we still drop dgraph.type so subsequent queryX no longer
+	// matches; callers will see lingering scalar values, which is the same
+	// behaviour as upstream when a type isn't defined.
+	preds := typePredicates(typeName)
+	preds = append(preds, "dgraph.type")
+
+	var rdf strings.Builder
+	for _, u := range uids {
+		for _, p := range preds {
+			fmt.Fprintf(&rdf, "<%s> <%s> * .\n", u, p)
+		}
+	}
+	mut := newApiMutation()
+	mut.DelNquads = []byte(rdf.String())
+	if _, err := db.Mutate(ctx, mut); err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Name, err)
+	}
+	return resolved, nil
+}
+
+// filterToDQL turns a simple filter map into a DQL root-function string.
+func filterToDQL(f map[string]any) (string, error) {
+	if v, ok := f["id"]; ok {
+		s, ok := v.(string)
+		if !ok || !strings.HasPrefix(s, "0x") {
+			return "", fmt.Errorf("filter.id must be a 0x-prefixed string")
+		}
+		return fmt.Sprintf("uid(%s)", s), nil
+	}
+	if v, ok := f["ids"]; ok {
+		list, ok := v.([]any)
+		if !ok {
+			return "", fmt.Errorf("filter.ids must be a list")
+		}
+		parts := make([]string, 0, len(list))
+		for _, x := range list {
+			s, ok := x.(string)
+			if !ok {
+				return "", fmt.Errorf("filter.ids entries must be strings")
+			}
+			parts = append(parts, s)
+		}
+		return fmt.Sprintf("uid(%s)", strings.Join(parts, ", ")), nil
+	}
+	if v, ok := f["has"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("filter.has must be a predicate name string")
+		}
+		return fmt.Sprintf("has(%s)", s), nil
+	}
+	if v, ok := f["eq"]; ok {
+		obj, ok := v.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("filter.eq must be {predicate, value}")
+		}
+		pred, _ := obj["predicate"].(string)
+		val := obj["value"]
+		if pred == "" {
+			return "", fmt.Errorf("filter.eq.predicate is required")
+		}
+		return fmt.Sprintf("eq(%s, %s)", pred, encodeRDFValue(val)), nil
+	}
+	return "", fmt.Errorf("unsupported filter; need id / ids / has / eq")
+}
+
+// queryFilterUids resolves a root-function to a list of UID strings via DQL.
+func queryFilterUids(ctx context.Context, db *dgraph2.DB, rootFn string) (map[string]any, error) {
+	resp, err := db.Query(ctx, fmt.Sprintf("{ q(func: %s) { uid } }", rootFn))
+	if err != nil {
+		return nil, err
+	}
+	var raw struct {
+		Q []struct {
+			UID string `json:"uid"`
+		} `json:"q"`
+	}
+	if err := json.Unmarshal(resp.Json, &raw); err != nil {
+		return nil, err
+	}
+	uids := make([]string, 0, len(raw.Q))
+	for _, e := range raw.Q {
+		uids = append(uids, e.UID)
+	}
+	return map[string]any{"uids": uids, "count": len(uids)}, nil
+}
+
+// typePredicates returns the list of bare predicate names declared on the
+// given DQL type. Strips namespace prefixes from each field. Returns an
+// empty slice if the type is unknown.
+func typePredicates(typeName string) []string {
+	t, ok := dgraphSchemaType(typeName)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(t.Fields))
+	for _, fld := range t.Fields {
+		_, attr := splitNamespacedAttr(fld.Predicate)
+		out = append(out, attr)
+	}
+	return out
 }
 
 // requireStringArg pulls a named argument off a field as a string,

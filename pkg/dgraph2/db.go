@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -645,23 +646,33 @@ func isBlankNode(s string) bool { return strings.HasPrefix(s, "_:") }
 // dgraph2 export is a single-file dump (no group iteration / chunking
 // like upstream); fine for the embedded-DB use case.
 func (d *DB) Export(ctx context.Context, format, dst string) error {
-	switch format {
-	case "rdf":
-		return d.exportRDF(ctx, dst)
-	case "json":
-		return d.exportJSON(ctx, dst)
-	default:
-		return fmt.Errorf("Export: unknown format %q (want rdf or json)", format)
-	}
-}
-
-func (d *DB) exportRDF(ctx context.Context, dst string) error {
 	f, err := os.Create(dst)
 	if err != nil {
 		return fmt.Errorf("Export: create: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+	if err := d.ExportTo(ctx, format, f); err != nil {
+		return err
+	}
+	return f.Sync()
+}
 
+// ExportTo writes the database in RDF or JSON form to an arbitrary writer
+// (file, HTTP response body, *bytes.Buffer in tests). Same content as
+// Export but doesn't take a path, so callers can stream the dump straight
+// into a network connection.
+func (d *DB) ExportTo(ctx context.Context, format string, w io.Writer) error {
+	switch format {
+	case "rdf":
+		return d.exportRDF(ctx, w)
+	case "json":
+		return d.exportJSON(ctx, w)
+	default:
+		return fmt.Errorf("Export: unknown format %q (want rdf or json)", format)
+	}
+}
+
+func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 	readTs := worker.CurrentTs()
 	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
 		readTs = oraTs
@@ -691,7 +702,7 @@ func (d *DB) exportRDF(ctx context.Context, dst string) error {
 		if err == nil {
 			line := fmt.Sprintf("<0x%x> <%s> %s .\n",
 				pk.Uid, attr, formatRDFValue(val))
-			_, _ = f.WriteString(line)
+			_, _ = w.Write([]byte(line))
 		}
 		return nil, nil
 	}
@@ -699,16 +710,11 @@ func (d *DB) exportRDF(ctx context.Context, dst string) error {
 	if err := stream.Orchestrate(ctx); err != nil {
 		return fmt.Errorf("Export: orchestrate: %w", err)
 	}
-	return f.Sync()
+	return nil
 }
 
-func (d *DB) exportJSON(ctx context.Context, dst string) error {
-	f, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("Export: create: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-	_, _ = f.WriteString("[")
+func (d *DB) exportJSON(ctx context.Context, w io.Writer) error {
+	_, _ = w.Write([]byte("["))
 	first := true
 
 	readTs := worker.CurrentTs()
@@ -736,10 +742,10 @@ func (d *DB) exportJSON(ctx context.Context, dst string) error {
 			return nil, nil
 		}
 		if !first {
-			_, _ = f.WriteString(",")
+			_, _ = w.Write([]byte(","))
 		}
 		first = false
-		_, _ = fmt.Fprintf(f, `{"subject":"0x%x","predicate":%q,"value":%s}`,
+		_, _ = fmt.Fprintf(w, `{"subject":"0x%x","predicate":%q,"value":%s}`,
 			pk.Uid, attr, jsonValue(val))
 		return nil, nil
 	}
@@ -747,8 +753,8 @@ func (d *DB) exportJSON(ctx context.Context, dst string) error {
 	if err := stream.Orchestrate(ctx); err != nil {
 		return fmt.Errorf("Export: orchestrate: %w", err)
 	}
-	_, _ = f.WriteString("]")
-	return f.Sync()
+	_, _ = w.Write([]byte("]"))
+	return nil
 }
 
 func formatRDFValue(v types.Val) string {
