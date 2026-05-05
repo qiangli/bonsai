@@ -339,9 +339,13 @@ func TestFeatureFacets(t *testing.T) {
 	if !strings.Contains(got, "Bob") {
 		t.Errorf("@facets edge expansion failed: %s", got)
 	}
-	// The facet values should appear under "friend|since" / "friend|weight".
-	if !strings.Contains(got, "since") {
-		t.Logf("note: @facets values may not be emitted: %s", got)
+	// Facet values must round-trip into the JSON output as
+	// `<edge>|<facet-name>`. Earlier the test was defensive about this
+	// (a t.Logf if missing); the engine actually emits them correctly.
+	for _, want := range []string{`"friend|since":2020`, `"friend|weight":0.9`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("@facets value missing %q in: %s", want, got)
+		}
 	}
 }
 
@@ -624,6 +628,40 @@ func TestFeatureAutoDetectNetworkXImport(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("auto-imported graph missing %s: %s", want, got)
 		}
+	}
+}
+
+// A failing edge inside a multi-edge Mutate must leave the DB untouched —
+// no partial commit. The unknown-predicate rejection is what we exercise
+// here because it's the easiest failure to trigger; the same atomicity
+// applies to type-conversion failures and the like.
+func TestFeatureMutateAtomicOnPartialFailure(t *testing.T) {
+	db := newDB(t)
+	ctx := context.Background()
+	mustAlter(t, db, "name: string @index(exact) .\n") // `unknown_pred` deliberately omitted
+
+	// Batch has two valid edges plus one with an unknown predicate. The
+	// unknown predicate trips runMutation's schema check and aborts the
+	// whole batch — no Alice/Bob should appear in the DB.
+	_, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:a <name>          "Alice" .
+		_:b <name>          "Bob" .
+		_:a <unknown_pred>  "should-fail" .
+	`)})
+	if err == nil {
+		t.Fatalf("expected Mutate to error on unknown predicate")
+	}
+	if !strings.Contains(err.Error(), "no schema for predicate") {
+		t.Errorf("unexpected error wording: %v", err)
+	}
+
+	// Confirm the DB is empty — no Alice / Bob from the failed batch.
+	got := mustQuery(t, db, `{ q(func: has(name)) { name } }`)
+	if strings.Contains(got, "Alice") || strings.Contains(got, "Bob") {
+		t.Errorf("partial commit leaked: %s", got)
+	}
+	if !strings.Contains(got, `"q":[]`) && !strings.Contains(got, "{}") {
+		t.Errorf("expected empty query result, got: %s", got)
 	}
 }
 

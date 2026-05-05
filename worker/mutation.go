@@ -193,9 +193,26 @@ func MutateOverNetwork(ctx context.Context, m *pb.Mutations) (*api.TxnContext, e
 	}
 
 	if len(m.Edges) > 0 {
+		// All-or-nothing guarantee for the common edge-only case:
+		// runMutation appends to an in-memory posting.Txn; nothing
+		// reaches disk until CommitToDisk + writer.Flush below. Any
+		// failure in the loop returns early and the txn goes out of
+		// scope without writing. Schema/type updates above are persisted
+		// directly and are NOT rolled back if subsequent edges fail —
+		// callers that mix schema and edges in one Mutations should
+		// expect the schema to land even when an edge errors. bonsai
+		// inherits this from upstream's mutation pipeline.
 		txn := posting.NewTxn(startTs)
 		for _, edge := range m.Edges {
 			if err := runMutation(ctx, edge, txn); err != nil {
+				// We allocated startTs above but never reach
+				// CommitToDisk; tell the posting Oracle we're done with
+				// this ts so subsequent reads at >= startTs don't block
+				// in WaitForTs forever. Without this, a failed Mutate
+				// leaves the DB unreadable until something else commits.
+				posting.Oracle().ProcessDelta(&pb.OracleDelta{
+					MaxAssigned: startTs,
+				})
 				return nil, err
 			}
 		}

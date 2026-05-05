@@ -6,14 +6,22 @@
 package bonsai_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
+	bpb "github.com/dgraph-io/badger/v4/pb"
+	"github.com/klauspost/compress/s2"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/qiangli/bonsai/pkg/bonsai"
 	"github.com/qiangli/bonsai/x"
@@ -691,6 +699,127 @@ func TestDQLBackupRestoreRoundtrip(t *testing.T) {
 	if !strings.Contains(string(r.Json), `"name":"Restored1"`) {
 		t.Errorf("restore lost data: %s", string(r.Json))
 	}
+}
+
+// TestBackupManifestUpstreamFormat validates that the on-disk
+// manifest.json and the snappy-framed body bonsai produces match the
+// upstream Dgraph backup wire format. We don't run upstream's `dgraph
+// restore` here (avoids dragging upstream into the test); instead we
+// assert every required field is present with the right type, the JSON
+// keys are exactly what upstream's worker.ManifestBase declares, the
+// version magic is 2105, and the `r<ReadTs>-g1.backup` body decodes as
+// snappy(uint64-LE-size + KVList proto) — the framing upstream
+// `restore_map.go` reads.
+func TestBackupManifestUpstreamFormat(t *testing.T) {
+	src := t.TempDir()
+	bdir := t.TempDir()
+	ctx := context.Background()
+
+	db, err := bonsai.Open(bonsai.Options{Dir: src})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	if err := db.Alter(ctx, "name: string @index(exact) .\n"); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:a <name> "Alice" .
+		_:b <name> "Bob"   .
+	`)}); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	if _, err := db.BackupTo(ctx, bonsai.BackupOptions{Dir: bdir, Type: bonsai.BackupFull}); err != nil {
+		t.Fatalf("BackupTo: %v", err)
+	}
+
+	// 1) manifest.json: parse as raw JSON and verify the upstream key set.
+	masterRaw, err := os.ReadFile(filepath.Join(bdir, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var rawMaster struct {
+		Manifests []map[string]any `json:"manifests"`
+	}
+	if err := json.Unmarshal(masterRaw, &rawMaster); err != nil {
+		t.Fatalf("parse manifest.json: %v", err)
+	}
+	if len(rawMaster.Manifests) != 1 {
+		t.Fatalf("expected 1 manifest entry, got %d", len(rawMaster.Manifests))
+	}
+	m := rawMaster.Manifests[0]
+	for _, key := range []string{
+		"type", "since", "read_ts", "backup_id", "backup_num",
+		"version", "path", "encrypted", "compression",
+		"groups", "drop_operations",
+	} {
+		if _, ok := m[key]; !ok {
+			t.Errorf("manifest missing upstream key %q (full keys: %v)", key, keysOf(m))
+		}
+	}
+	// `version` must equal upstream's x.ManifestVersion (2105 as of the
+	// fork point); restore code uses this to gate compat behaviour.
+	if v, _ := m["version"].(float64); int(v) != 2105 {
+		t.Errorf("manifest version=%v, want 2105", m["version"])
+	}
+	if t0, _ := m["type"].(string); t0 != "full" {
+		t.Errorf("manifest type=%v, want full", m["type"])
+	}
+	// Groups must be {"1": [...]} — bonsai is single-group.
+	groups, _ := m["groups"].(map[string]any)
+	if _, ok := groups["1"]; !ok {
+		t.Errorf("manifest groups missing key \"1\": %v", m["groups"])
+	}
+
+	// 2) Body framing: snappy → uint64 LE size + protobuf KVList chunks.
+	subdir, _ := m["path"].(string)
+	readTs, _ := m["read_ts"].(float64)
+	bodyPath := filepath.Join(bdir, subdir, fmt.Sprintf("r%d-g1.backup", uint64(readTs)))
+	body, err := os.ReadFile(bodyPath)
+	if err != nil {
+		t.Fatalf("read body %s: %v", bodyPath, err)
+	}
+	r := s2.NewReader(bytes.NewReader(body))
+	var (
+		szBuf  [8]byte
+		chunks int
+		kvs    int
+	)
+	for {
+		_, err := io.ReadFull(r, szBuf[:])
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read size at chunk %d: %v", chunks, err)
+		}
+		size := binary.LittleEndian.Uint64(szBuf[:])
+		if size == 0 || size > 1<<28 {
+			t.Fatalf("chunk %d size=%d looks invalid", chunks, size)
+		}
+		buf := make([]byte, size)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			t.Fatalf("read chunk %d (size=%d): %v", chunks, size, err)
+		}
+		var list bpb.KVList
+		if err := proto.Unmarshal(buf, &list); err != nil {
+			t.Fatalf("unmarshal chunk %d: %v", chunks, err)
+		}
+		chunks++
+		kvs += len(list.Kv)
+	}
+	if chunks == 0 || kvs == 0 {
+		t.Errorf("no chunks/KVs decoded from body (chunks=%d kvs=%d)", chunks, kvs)
+	}
+	t.Logf("body OK: %d snappy chunks, %d KVs total", chunks, kvs)
+}
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // TestBackupToManifestRoundtrip exercises the multi-file backup format:
