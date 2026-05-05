@@ -33,6 +33,9 @@
 //   - ErrReadOnly, ErrNoValue
 //   - ImportStream
 //
+// And the graphalgo helpers — see pkg/bonsai/graphalgo/graphalgo.go.
+// They are part of v1.
+//
 // Anything in pkg/audit/, pkg/graphql/, pkg/ui/, or cmd/bonsai/* is
 // experimental — useful, but the API may change between minor versions.
 // Anything in worker/, posting/, schema/, query/, dql/, types/, tok/,

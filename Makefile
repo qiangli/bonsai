@@ -18,7 +18,7 @@ build:
 	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bonsai ./cmd/bonsai
 
 test:
-	go test $(GOFLAGS) -count=1 ./pkg/bonsai/... ./pkg/graphql/... ./pkg/audit/... ./pkg/ui/... ./cmd/bonsai/server/...
+	go test $(GOFLAGS) -count=1 ./pkg/bonsai/... ./pkg/bonsai/graphalgo/... ./pkg/graphql/... ./pkg/audit/... ./pkg/ui/... ./cmd/bonsai/server/...
 
 # go vet on the whole tree flags many pre-existing `copylocks` warnings in
 # upstream code (the proto-generated types embed sync.Mutex via MessageState
