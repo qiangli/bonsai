@@ -1,10 +1,11 @@
 # Bonsai — lightweight, local-only fork of upstream Dgraph.
 #
 # Targets:
-#   make build  — compile the single `bonsai` binary (subcommands inside)
-#   make test   — run unit + e2e tests
-#   make all    — build + test + vet
-#   make clean  — remove the built binary
+#   make build    — compile the single `bonsai` binary (subcommands inside)
+#   make install  — `go install` into $GOBIN (or $GOPATH/bin) with the same ldflags
+#   make test     — run unit + e2e tests
+#   make all      — build + test + vet
+#   make clean    — remove the built binary
 
 GOFLAGS  ?=
 # Version baked into the binary via -ldflags. Override with `make build VERSION=v1.2.3`
@@ -12,10 +13,22 @@ GOFLAGS  ?=
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test all clean vet
+# INSTALL_DIR resolves to where `go install` will deposit the binary, so the
+# `install` target can print a helpful "added to <path>" line on success.
+INSTALL_DIR := $(shell go env GOBIN)
+ifeq ($(INSTALL_DIR),)
+INSTALL_DIR := $(shell go env GOPATH)/bin
+endif
+
+.PHONY: build install test all clean vet
 
 build:
 	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bonsai ./cmd/bonsai
+
+install:
+	@echo "→ installing bonsai $(VERSION) into $(INSTALL_DIR)"
+	@go install $(GOFLAGS) -ldflags="$(LDFLAGS)" ./cmd/bonsai
+	@echo "  done — run \`bonsai help\` to verify ($(INSTALL_DIR) must be on \$$PATH)"
 
 test:
 	go test $(GOFLAGS) -count=1 ./pkg/bonsai/... ./pkg/bonsai/graphalgo/... ./pkg/graphql/... ./pkg/audit/... ./pkg/ui/... ./cmd/bonsai/server/... ./cmd/bonsai/tools/...
