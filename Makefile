@@ -6,13 +6,17 @@
 #   make all    — build + test
 #   make clean  — remove the built binary
 
-GOFLAGS ?=
-PKGS    := ./pkg/dgraph2/... ./cmd/dgraph2-server/... ./worker/... ./schema/... ./posting/... ./query/... ./dql/... ./types/... ./tok/... ./algo/... ./codec/... ./lex/... ./x/...
+GOFLAGS  ?=
+# Version baked into the binary via -ldflags. Override with `make build VERSION=v1.2.3`
+# or via the VERSION env var. Falls back to `git describe` if available, else "dev".
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS  := -s -w -X main.version=$(VERSION)
+PKGS     := ./pkg/dgraph2/... ./cmd/dgraph2-server/... ./worker/... ./schema/... ./posting/... ./query/... ./dql/... ./types/... ./tok/... ./algo/... ./codec/... ./lex/... ./x/...
 
 .PHONY: build test all clean vet
 
 build:
-	go build $(GOFLAGS) ./cmd/dgraph2-server
+	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" ./cmd/dgraph2-server ./cmd/dgraph2-cli
 
 test:
 	go test $(GOFLAGS) -count=1 ./pkg/dgraph2/... ./cmd/dgraph2-server/...

@@ -16,7 +16,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -33,32 +32,73 @@ import (
 	"github.com/dgraph-io/dgo/v250/protos/api"
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	flag "github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
 )
 
+// version is set at build time via -ldflags "-X main.version=...". It's
+// returned by the gRPC CheckVersion RPC and tagged onto OTel spans.
+var version = "dev"
+
+// serverConfig is the effective configuration after flag parsing. It backs
+// /admin/config for read-only introspection. Pointer fields (draining) reflect
+// runtime-mutable state; everything else is boot-time fixed.
+type serverConfig struct {
+	Version       string `json:"version"`
+	Dir           string `json:"dir"`
+	HTTPAddr      string `json:"http"`
+	GRPCAddr      string `json:"grpc"`
+	TLSEnabled    bool   `json:"tls_enabled"`
+	TraceStdout   bool   `json:"trace_stdout"`
+	TraceOTLPHTTP bool   `json:"trace_otlp_http"`
+	TraceOTLPGRPC bool   `json:"trace_otlp_grpc"`
+	TraceEndpoint string `json:"trace_endpoint,omitempty"`
+	ServiceName   string `json:"trace_service_name"`
+	Draining      bool   `json:"draining"`
+}
+
 func main() {
+	configFile := flag.String("config", "", "YAML config file (overridden by env DGRAPH2_* and CLI flags)")
 	dir := flag.String("dir", "./dgraph2-data", "data directory (Badger lives at <dir>/p)")
 	addr := flag.String("http", ":8080", "HTTP listen address")
 	grpcAddr := flag.String("grpc", ":9080", "gRPC listen address")
 	tlsCert := flag.String("tls-cert", "", "PEM-encoded TLS cert (enables TLS on both HTTP and gRPC)")
 	tlsKey := flag.String("tls-key", "", "PEM-encoded TLS private key")
 	traceStdout := flag.Bool("trace-stdout", false, "emit OpenTelemetry traces to stdout")
+	traceOTLPHTTP := flag.Bool("trace-otlp-http", false, "emit OpenTelemetry traces via OTLP/HTTP")
+	traceOTLPGRPC := flag.Bool("trace-otlp-grpc", false, "emit OpenTelemetry traces via OTLP/gRPC")
+	traceEndpoint := flag.String("trace-endpoint", "", "OTLP exporter endpoint host:port (default: localhost:4318 for HTTP, localhost:4317 for gRPC; OTEL_EXPORTER_OTLP_ENDPOINT also honoured)")
+	traceInsecure := flag.Bool("trace-insecure", true, "skip TLS for OTLP exporters")
+	traceServiceName := flag.String("trace-service-name", "dgraph2", "service.name resource attribute")
 	flag.Parse()
 
-	// Wire an OpenTelemetry tracer provider if requested. dgraph2 has otel
-	// imports throughout query/ and worker/, but no exporter is registered
-	// by default — the spans are no-ops. With --trace-stdout we install
-	// the stdout exporter so operators can see spans during development.
-	if *traceStdout {
-		if shutdown, err := setupTracingStdout(); err == nil {
-			defer func() { _ = shutdown(context.Background()) }()
-			log.Printf("OpenTelemetry stdout tracing enabled")
-		} else {
-			log.Printf("trace-stdout setup failed: %v", err)
-		}
+	// Wire viper for env (DGRAPH2_*) + optional YAML config.
+	// Precedence: explicit CLI flag > env > YAML > flag default.
+	if err := loadConfig(*configFile); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
+	// Wire an OpenTelemetry tracer provider. dgraph2 has otel imports
+	// throughout query/ and worker/; without an exporter the spans are no-ops.
+	shutdownTrace, err := setupTracing(context.Background(), tracingOpts{
+		stdout:      *traceStdout,
+		otlpHTTP:    *traceOTLPHTTP,
+		otlpGRPC:    *traceOTLPGRPC,
+		endpoint:    *traceEndpoint,
+		insecure:    *traceInsecure,
+		serviceName: *traceServiceName,
+		version:     version,
+	})
+	if err != nil {
+		log.Fatalf("tracing setup: %v", err)
+	}
+	defer func() { _ = shutdownTrace(context.Background()) }()
+	if *traceStdout || *traceOTLPHTTP || *traceOTLPGRPC {
+		log.Printf("OpenTelemetry tracing enabled (stdout=%v otlp-http=%v otlp-grpc=%v endpoint=%q)",
+			*traceStdout, *traceOTLPHTTP, *traceOTLPGRPC, *traceEndpoint)
 	}
 
 	db, err := dgraph2.Open(dgraph2.Options{Dir: *dir})
@@ -87,6 +127,8 @@ func main() {
 	mux.HandleFunc("/set", handleSet(db))
 	mux.HandleFunc("/get", handleGet(db))
 	mux.HandleFunc("/assign", handleAssign(db))
+	mux.HandleFunc("/commit", handleCommit())
+	mux.HandleFunc("/abort", handleAbort())
 	mux.HandleFunc("/admin/backup", handleBackup(db))
 	mux.HandleFunc("/admin/restore", handleRestore(db))
 	mux.HandleFunc("/admin/export", handleExport(db))
@@ -95,6 +137,18 @@ func main() {
 	mux.HandleFunc("/admin/draining", handleAdminDraining(db, draining))
 	mux.HandleFunc("/admin/shutdown", handleAdminShutdown(stop))
 	mux.HandleFunc("/admin/namespace", handleAdminNamespace(db))
+	mux.HandleFunc("/admin/config", handleAdminConfig(serverConfig{
+		Version:       version,
+		Dir:           *dir,
+		HTTPAddr:      *addr,
+		GRPCAddr:      *grpcAddr,
+		TLSEnabled:    *tlsCert != "" && *tlsKey != "",
+		TraceStdout:   *traceStdout,
+		TraceOTLPHTTP: *traceOTLPHTTP,
+		TraceOTLPGRPC: *traceOTLPGRPC,
+		TraceEndpoint: *traceEndpoint,
+		ServiceName:   *traceServiceName,
+	}, draining))
 	mux.Handle("/metrics", promhttp.Handler())
 	// /debug/pprof/* — registered as side effect of importing net/http/pprof.
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -281,6 +335,37 @@ func (m apiMutation) toApi() *apiproto.Mutation {
 	return &apiproto.Mutation{SetNquads: m.SetNquads, DelNquads: m.DelNquads}
 }
 
+// handleCommit and handleAbort are compatibility shims. dgraph2 commits
+// synchronously inside /mutate (no client-side txn state), so a follow-up
+// /commit is a no-op and /abort always reports success — there is no
+// pending state to roll back. Provided so dgo-style clients and proxies
+// that issue these calls don't error out.
+func handleCommit() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Echo the start_ts (if supplied) back as commit_ts so clients can
+		// thread their own bookkeeping. Keys are inert here.
+		var req struct {
+			StartTs uint64   `json:"start_ts"`
+			Keys    []string `json:"keys"`
+			Preds   []string `json:"preds"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req) // body is optional
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"start_ts":  req.StartTs,
+			"commit_ts": req.StartTs,
+			"aborted":   false,
+		})
+	}
+}
+
+func handleAbort() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"aborted":true}`)
+	}
+}
+
 func handleAssign(db *dgraph2.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nStr := r.URL.Query().Get("n")
@@ -364,6 +449,22 @@ func handleAdminDraining(db *dgraph2.DB, draining *atomic.Bool) http.HandlerFunc
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]bool{"draining": draining.Load()})
+	}
+}
+
+// handleAdminConfig returns the boot-time effective config plus the live
+// draining state. Read-only: mutating boot-time config requires a restart.
+// Mutable runtime state (draining) lives behind /admin/draining.
+func handleAdminConfig(cfg serverConfig, draining *atomic.Bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "GET only — runtime mutables go through /admin/{draining,namespace}", http.StatusMethodNotAllowed)
+			return
+		}
+		out := cfg
+		out.Draining = draining.Load()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
 	}
 }
 

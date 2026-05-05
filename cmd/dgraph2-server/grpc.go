@@ -120,9 +120,10 @@ func (g *grpcAdapter) CommitOrAbort(_ context.Context, tc *api.TxnContext) (*api
 	return tc, nil
 }
 
-// CheckVersion returns the dgraph2 version string.
+// CheckVersion returns the dgraph2 version string. The package-level `version`
+// var in main.go is set at build time via `-ldflags "-X main.version=..."`.
 func (g *grpcAdapter) CheckVersion(_ context.Context, _ *api.Check) (*api.Version, error) {
-	return &api.Version{Tag: "dgraph2-0.1.0"}, nil
+	return &api.Version{Tag: "dgraph2-" + version}, nil
 }
 
 // RunDQL is the newer combined-DQL endpoint. Same shape as Query.
