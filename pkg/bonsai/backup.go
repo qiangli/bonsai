@@ -294,6 +294,16 @@ func splitNamespacedAttr(p string) (ns []byte, attr string) {
 	return []byte(p[:8]), strings.TrimPrefix(p[8:], "")
 }
 
+// RestoreOptions configures RestoreFromManifest.
+type RestoreOptions struct {
+	// UntilTs caps the restore at a target ReadTs. Manifests in the chain
+	// whose ReadTs > UntilTs are skipped. Use this for point-in-time
+	// recovery: "give me the database as it looked at T".
+	//
+	// 0 (default) means restore the entire chain.
+	UntilTs uint64
+}
+
 // RestoreFromManifest replays an upstream-compatible multi-file backup into
 // the open DB. The directory must contain a manifest.json with a chain
 // starting at BackupNum=1 (full) followed by zero or more incremental
@@ -303,8 +313,18 @@ func splitNamespacedAttr(p string) (ns []byte, attr string) {
 // Unlike RestoreFrom (which calls Badger Load and wipes existing data), this
 // function applies on top of whatever is already in the DB. Call db.DropAll
 // first if a clean slate is needed.
-func (d *DB) RestoreFromManifest(ctx context.Context, dir string) (err error) {
-	defer d.auditDeferred("RestoreFromManifest", ctx, map[string]any{"dir": dir}, &err)()
+//
+// For point-in-time recovery, use RestoreFromManifestWithOptions and pass
+// RestoreOptions.UntilTs to stop at a target timestamp.
+func (d *DB) RestoreFromManifest(ctx context.Context, dir string) error {
+	return d.RestoreFromManifestWithOptions(ctx, dir, RestoreOptions{})
+}
+
+// RestoreFromManifestWithOptions is RestoreFromManifest with knobs. The
+// most common knob is UntilTs for point-in-time recovery.
+func (d *DB) RestoreFromManifestWithOptions(ctx context.Context, dir string, opts RestoreOptions) (err error) {
+	defer d.auditDeferred("RestoreFromManifest", ctx,
+		map[string]any{"dir": dir, "until_ts": opts.UntilTs}, &err)()
 	master, err := readMasterManifest(dir)
 	if err != nil {
 		return err
@@ -330,16 +350,34 @@ func (d *DB) RestoreFromManifest(ctx context.Context, dir string) (err error) {
 		}
 	}
 
+	// PIT bound. The full backup (BackupNum=1) is always applied — it's
+	// the floor, even if its ReadTs is past UntilTs the alternative is "no
+	// data at all", which isn't a useful semantics. Incrementals past the
+	// bound are skipped.
+	if opts.UntilTs > 0 {
+		full := master.Manifests[0]
+		if full.ReadTs > opts.UntilTs {
+			return fmt.Errorf("RestoreFromManifest: UntilTs %d is older than the full backup's ReadTs %d",
+				opts.UntilTs, full.ReadTs)
+		}
+	}
+
 	var maxVer uint64
+	var applied int
 	for _, m := range master.Manifests {
+		if opts.UntilTs > 0 && m.ReadTs > opts.UntilTs {
+			break
+		}
 		v, err := d.applyBackupFile(ctx, dir, m)
 		if err != nil {
 			return fmt.Errorf("apply %s: %w", m.Path, err)
 		}
+		applied++
 		if v > maxVer {
 			maxVer = v
 		}
 	}
+	_ = applied // could surface this on the audit entry; kept local for now
 
 	// Advance the timestamp counter past the highest restored version.
 	target := maxVer + 1

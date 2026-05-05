@@ -316,6 +316,8 @@ func handleGet(db *bonsai.DB) http.HandlerFunc {
 
 // handleQuery accepts a DQL query as the request body and returns the JSON
 // response on the wire (so curl just sees the result, not a wrapper object).
+// handleQuery serves DQL queries. Optional `?as_of=<ts>` reads at a past
+// timestamp (point-in-time read).
 func handleQuery(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -323,10 +325,24 @@ func handleQuery(db *bonsai.DB) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusBadRequest)
 			return
 		}
-		resp, err := db.Query(r.Context(), string(body))
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		var resp *api.Response
+		if asOf := r.URL.Query().Get("as_of"); asOf != "" {
+			ts, err := strconv.ParseUint(asOf, 10, 64)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("as_of: %v", err), http.StatusBadRequest)
+				return
+			}
+			resp, err = db.QueryAsOf(r.Context(), ts, string(body))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			resp, err = db.Query(r.Context(), string(body))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(resp.Json)
@@ -671,11 +687,25 @@ func handleRestore(db *bonsai.DB) http.HandlerFunc {
 			return
 		}
 		if fi, err := os.Stat(src); err == nil && fi.IsDir() {
-			if err := db.RestoreFromManifest(r.Context(), src); err != nil {
+			var opts bonsai.RestoreOptions
+			if pit := r.URL.Query().Get("until_ts"); pit != "" {
+				ts, err := strconv.ParseUint(pit, 10, 64)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("until_ts: %v", err), http.StatusBadRequest)
+					return
+				}
+				opts.UntilTs = ts
+			}
+			if err := db.RestoreFromManifestWithOptions(r.Context(), src, opts); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			_, _ = io.WriteString(w, `{"status":"ok","format":"manifest"}`)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":   "ok",
+				"format":   "manifest",
+				"until_ts": opts.UntilTs,
+			})
 			return
 		}
 		if err := db.RestoreFrom(r.Context(), src); err != nil {

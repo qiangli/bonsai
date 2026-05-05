@@ -87,6 +87,18 @@ type DB struct {
 // underlying state may have changed.
 func (d *DB) MutationTick() uint64 { return d.mutationTick.Load() }
 
+// NextReadableTs returns the current high-water timestamp — the maximum
+// of the local DB counter and the worker oracle. Callers can capture
+// this as a "save point" and later pass it to QueryAsOf to see the
+// state that was visible at that moment.
+func (d *DB) NextReadableTs() uint64 {
+	ts := d.tsCount.Load()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > ts {
+		ts = oraTs
+	}
+	return ts
+}
+
 // Open opens (or creates) a bonsai database at the given directory.
 //
 // On first open, the on-disk Badger is initialised, the worker layer is wired
@@ -383,15 +395,38 @@ func (d *DB) Query(ctx context.Context, q string) (*api.Response, error) {
 // QueryWithVars is Query with bound variables, e.g. `query Q($name: string) {
 // q(func: eq(name, $name)) {uid}}` with vars `{"$name": "Alice"}`.
 func (d *DB) QueryWithVars(ctx context.Context, q string, vars map[string]string) (*api.Response, error) {
+	return d.QueryWithVarsAsOf(ctx, 0, q, vars)
+}
+
+// QueryAsOf is Query against the database as it looked at readTs. Pass 0
+// for readTs to read at the current timestamp (same as Query). Bonsai
+// keeps all versions in Badger, so any past timestamp the engine has
+// observed is readable; ts beyond the current high-water mark is rejected.
+//
+// Use cases: forensics ("what did this node look like 5 minutes ago?"),
+// reproducible reports against a specific snapshot, debugging state at
+// the moment a mutation landed.
+func (d *DB) QueryAsOf(ctx context.Context, readTs uint64, q string) (*api.Response, error) {
+	return d.QueryWithVarsAsOf(ctx, readTs, q, nil)
+}
+
+// QueryWithVarsAsOf is QueryWithVars with an explicit readTs (0 = current).
+func (d *DB) QueryWithVarsAsOf(ctx context.Context, readTs uint64, q string, vars map[string]string) (*api.Response, error) {
 	parsed, err := dql.Parse(dql.Request{Str: q, Variables: vars})
 	if err != nil {
 		return nil, fmt.Errorf("Query: parse: %w", err)
 	}
 
-	readTs := d.tsCount.Load()
-	if oraTs := posting.Oracle().MaxAssigned(); oraTs > readTs {
-		readTs = oraTs
+	curTs := d.tsCount.Load()
+	if oraTs := posting.Oracle().MaxAssigned(); oraTs > curTs {
+		curTs = oraTs
 	}
+	if readTs == 0 {
+		readTs = curTs
+	} else if readTs > curTs {
+		return nil, fmt.Errorf("QueryAsOf: readTs %d exceeds current %d", readTs, curTs)
+	}
+
 	latency := &query.Latency{Start: timeNow()}
 	req := &query.Request{
 		ReadTs:   readTs,

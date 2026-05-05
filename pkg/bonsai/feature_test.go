@@ -578,6 +578,103 @@ func TestFeatureExportImportRoundtrip(t *testing.T) {
 	}
 }
 
+// QueryAsOf reads at a past timestamp. We anchor the snapshot at the
+// first write's commit timestamp (returned by Mutate); reading there
+// should see Alice but not Bob, who is inserted afterwards.
+func TestFeaturePITQueryAsOf(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, "name: string @index(exact) .\n")
+	aliceResp := mustMutate(t, db, `_:a <name> "Alice" .`)
+	tsBefore := aliceResp.GetTxn().GetCommitTs()
+	if tsBefore == 0 {
+		t.Fatalf("Alice's mutation has zero commit_ts: %+v", aliceResp.Txn)
+	}
+
+	// Second write, after the snapshot.
+	mustMutate(t, db, `_:b <name> "Bob" .`)
+
+	// Current view sees both.
+	now := mustQuery(t, db, `{ q(func: has(name)) { name } }`)
+	if !strings.Contains(now, "Alice") || !strings.Contains(now, "Bob") {
+		t.Fatalf("current view missing entries: %s", now)
+	}
+
+	// Read at Alice's commit ts: only Alice should be visible.
+	asOf, err := db.QueryAsOf(context.Background(), tsBefore, `{ q(func: has(name)) { name } }`)
+	if err != nil {
+		t.Fatalf("QueryAsOf: %v", err)
+	}
+	body := string(asOf.Json)
+	if !strings.Contains(body, "Alice") {
+		t.Errorf("PIT view missing Alice: %s", body)
+	}
+	if strings.Contains(body, "Bob") {
+		t.Errorf("PIT view leaked Bob (snapshot ts=%d): %s", tsBefore, body)
+	}
+
+	// Reading past the current high-water mark errors.
+	if _, err := db.QueryAsOf(context.Background(), 1<<60, `{ q(func: has(name)) { name } }`); err == nil {
+		t.Errorf("expected QueryAsOf at future ts to error")
+	}
+}
+
+// PIT restore from a backup chain — full backup → mutate → incremental →
+// mutate again → incremental again → restore-up-to-after-first-incremental
+// into a fresh DB and assert only the first two batches survive.
+func TestFeaturePITRestoreFromManifest(t *testing.T) {
+	src := newDB(t)
+	bdir := t.TempDir()
+	mustAlter(t, src, "name: string @index(exact) .\n")
+	ctx := context.Background()
+
+	// Round 1: Alice. Full backup.
+	mustMutate(t, src, `_:a <name> "Alice" .`)
+	full, err := src.BackupTo(ctx, bonsai.BackupOptions{Dir: bdir, Type: bonsai.BackupFull})
+	if err != nil {
+		t.Fatalf("full backup: %v", err)
+	}
+
+	// Round 2: Bob. Incremental.
+	mustMutate(t, src, `_:b <name> "Bob" .`)
+	incr1, err := src.BackupTo(ctx, bonsai.BackupOptions{Dir: bdir, Type: bonsai.BackupIncremental})
+	if err != nil {
+		t.Fatalf("incr1 backup: %v", err)
+	}
+
+	// Round 3: Carol. Incremental we'll deliberately roll past during PIT.
+	mustMutate(t, src, `_:c <name> "Carol" .`)
+	if _, err := src.BackupTo(ctx, bonsai.BackupOptions{Dir: bdir, Type: bonsai.BackupIncremental}); err != nil {
+		t.Fatalf("incr2 backup: %v", err)
+	}
+
+	// PIT restore: bound at incr1's ReadTs — full + incr1 should apply,
+	// incr2 should be skipped.
+	dst := newDB(t)
+	if err := dst.RestoreFromManifestWithOptions(ctx, bdir, bonsai.RestoreOptions{
+		UntilTs: incr1.ReadTs,
+	}); err != nil {
+		t.Fatalf("PIT restore: %v", err)
+	}
+
+	got := mustQuery(t, dst, `{ q(func: has(name)) { name } }`)
+	for _, want := range []string{"Alice", "Bob"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PIT @ incr1 missing %s: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "Carol") {
+		t.Errorf("PIT @ incr1 leaked Carol (which is in incr2): %s", got)
+	}
+
+	// PIT bound older than the full backup itself is rejected.
+	dst2 := newDB(t)
+	if err := dst2.RestoreFromManifestWithOptions(ctx, bdir, bonsai.RestoreOptions{
+		UntilTs: full.ReadTs - 1,
+	}); err == nil {
+		t.Errorf("expected error when UntilTs precedes the full backup")
+	}
+}
+
 // within(geo, polygon) — points stored, query asks for points inside a
 // polygon. Reuses the same NYC/LA fixture as TestFeatureGeoNear.
 func TestFeatureGeoWithin(t *testing.T) {
