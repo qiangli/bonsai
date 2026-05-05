@@ -41,6 +41,7 @@ import (
 
 	"github.com/qiangli/dgraph2/chunker"
 	"github.com/qiangli/dgraph2/dql"
+	"github.com/qiangli/dgraph2/pkg/audit"
 	"github.com/qiangli/dgraph2/posting"
 	"github.com/qiangli/dgraph2/query"
 	"github.com/qiangli/dgraph2/schema"
@@ -59,6 +60,10 @@ type Options struct {
 	CacheMB int64
 	// EncryptionKey is reserved; dgraph2 currently runs unencrypted.
 	EncryptionKey []byte
+	// AuditLog, if non-nil, receives one entry per administrative or write
+	// operation (Mutate, Alter, Drop*, namespace, backup, restore). A nil
+	// logger is a cheap no-op at every call site.
+	AuditLog *audit.Logger
 }
 
 // DB is an open dgraph2 database.
@@ -200,6 +205,25 @@ func (d *DB) writeUidCounter(uid uint64) error {
 	return wb.Flush()
 }
 
+// auditDeferred returns a closure suitable for `defer ...()` that records
+// the operation's final error and elapsed time into the audit log. Pass a
+// pointer to the function's named-return error so the deferred function
+// observes its post-update value. When AuditLog is nil the closure is a
+// no-op — there's no allocation hot path beyond the closure itself.
+func (d *DB) auditDeferred(op string, ctx context.Context, args map[string]any, errPtr *error) func() {
+	if d.opts.AuditLog == nil {
+		return func() {}
+	}
+	start := time.Now()
+	return func() {
+		var e error
+		if errPtr != nil {
+			e = *errPtr
+		}
+		d.opts.AuditLog.LogErr(op, x.NamespaceFromContext(ctx), args, start, e)
+	}
+}
+
 // Close flushes and closes the database. It is safe to call multiple times.
 func (d *DB) Close() error {
 	if !d.closed.CompareAndSwap(false, true) {
@@ -244,7 +268,10 @@ func (d *DB) applyInitialSchema() error {
 // When a predicate's index/reverse/count directives change, Alter rebuilds
 // the indexes by dropping the old prefixes from Badger and re-tokenising
 // every existing data key.
-func (d *DB) Alter(ctx context.Context, schemaText string) error {
+func (d *DB) Alter(ctx context.Context, schemaText string) (err error) {
+	defer d.auditDeferred("Alter", ctx, map[string]any{
+		"schema_bytes": len(schemaText),
+	}, &err)()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -365,7 +392,13 @@ var timeNow = func() time.Time { return time.Now() }
 // in subject and object positions of N-Quad mutations. More exotic upsert
 // patterns (multiple mutations, conditional mutations) require additional
 // glue.
-func (d *DB) Upsert(ctx context.Context, queryDQL string, m *apipb.Mutation) (*api.Response, error) {
+func (d *DB) Upsert(ctx context.Context, queryDQL string, m *apipb.Mutation) (resp *api.Response, err error) {
+	defer d.auditDeferred("Upsert", ctx, map[string]any{
+		"query_bytes":  len(queryDQL),
+		"cond":         m.GetCond(),
+		"set_bytes":    len(m.GetSetNquads()) + len(m.GetSetJson()),
+		"delete_bytes": len(m.GetDelNquads()) + len(m.GetDeleteJson()),
+	}, &err)()
 	// Parse the query, telling the parser that any vars it defines will be
 	// used by the bundled mutation. Without needVars the parser rejects
 	// var-only queries with "Some variables are defined but not used".
@@ -485,11 +518,20 @@ func substVars(rdf []byte, vars map[string]uint64) []byte {
 //
 // On success the returned api.Response.Uids reports the assigned UIDs for
 // each blank node.
-func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error) {
+func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (resp *api.Response, err error) {
+	defer d.auditDeferred("Mutate", ctx, map[string]any{
+		"set_nquads_bytes":  len(m.GetSetNquads()),
+		"del_nquads_bytes":  len(m.GetDelNquads()),
+		"set_json_bytes":    len(m.GetSetJson()),
+		"delete_json_bytes": len(m.GetDeleteJson()),
+		"set_count":         len(m.GetSet()),
+		"del_count":         len(m.GetDel()),
+		"cond":              m.GetCond(),
+	}, &err)()
 	if m == nil {
 		return &api.Response{}, nil
 	}
-	resp := &api.Response{Uids: map[string]string{}}
+	resp = &api.Response{Uids: map[string]string{}}
 
 	type taggedNQ struct {
 		q      *apipb.NQuad
@@ -743,7 +785,8 @@ func jsonValue(v types.Val) string {
 //
 // Without ACL, anyone with server access can call this; the semantics are
 // "tenant routing", not "tenant isolation with auth".
-func (d *DB) CreateNamespace(ctx context.Context, ns uint64) error {
+func (d *DB) CreateNamespace(ctx context.Context, ns uint64) (err error) {
+	defer d.auditDeferred("CreateNamespace", ctx, map[string]any{"ns": ns}, &err)()
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	existing, err := d.listNamespacesLocked()
@@ -764,7 +807,8 @@ func (d *DB) CreateNamespace(ctx context.Context, ns uint64) error {
 
 // DropNamespace tears down a tenant: drops every Badger key prefixed with
 // the namespace, plus the schema and type entries.
-func (d *DB) DropNamespace(ctx context.Context, ns uint64) error {
+func (d *DB) DropNamespace(ctx context.Context, ns uint64) (err error) {
+	defer d.auditDeferred("DropNamespace", ctx, map[string]any{"ns": ns}, &err)()
 	if ns == x.RootNamespace {
 		return fmt.Errorf("DropNamespace: cannot drop root namespace")
 	}
@@ -871,7 +915,8 @@ func (d *DB) writeNamespaceRegistry(nss []uint64) error {
 
 // DropAll wipes every key from Badger and re-applies the reserved schema.
 // Equivalent to upstream's `Operation{DropAll: true}`.
-func (d *DB) DropAll(ctx context.Context) error {
+func (d *DB) DropAll(ctx context.Context) (err error) {
+	defer d.auditDeferred("DropAll", ctx, nil, &err)()
 	if err := d.pstore.DropAll(); err != nil {
 		return fmt.Errorf("DropAll: %w", err)
 	}
@@ -885,7 +930,8 @@ func (d *DB) DropAll(ctx context.Context) error {
 
 // DropData wipes data while preserving the schema. Drops all DataKey,
 // IndexKey, ReverseKey, CountKey prefixes; keeps SchemaKey + TypeKey.
-func (d *DB) DropData(ctx context.Context) error {
+func (d *DB) DropData(ctx context.Context) (err error) {
+	defer d.auditDeferred("DropData", ctx, nil, &err)()
 	prefixes := [][]byte{
 		{x.ByteData},
 		{x.ByteIndex},
@@ -903,7 +949,8 @@ func (d *DB) DropData(ctx context.Context) error {
 // DropPredicate removes all data and indexes for one predicate. The
 // argument can be the bare name ("name") or already-namespaced
 // ("0-name"); we coerce to the namespaced form here.
-func (d *DB) DropPredicate(ctx context.Context, predicate string) error {
+func (d *DB) DropPredicate(ctx context.Context, predicate string) (err error) {
+	defer d.auditDeferred("DropPredicate", ctx, map[string]any{"predicate": predicate}, &err)()
 	attr := predicate
 	if !looksNamespaced(attr) {
 		attr = x.NamespaceAttr(x.RootNamespace, attr)
@@ -929,7 +976,8 @@ func (d *DB) DropPredicate(ctx context.Context, predicate string) error {
 // DropType removes a type definition by name (does not affect predicate
 // data). The type definition is the schema-language `type T { ... }`
 // declaration.
-func (d *DB) DropType(ctx context.Context, typeName string) error {
+func (d *DB) DropType(ctx context.Context, typeName string) (err error) {
+	defer d.auditDeferred("DropType", ctx, map[string]any{"type": typeName}, &err)()
 	if err := schema.State().DeleteType(typeName, d.nextTs()); err != nil {
 		return fmt.Errorf("DropType: %w", err)
 	}
@@ -1144,7 +1192,8 @@ var ErrNoValue = posting.ErrNoValue
 // worker timestamp counter (which is what mutations advance). Reading at a
 // stale ts misses freshly-committed mutations that hadn't propagated to the
 // DB-side counter yet.
-func (d *DB) Backup(ctx context.Context, dst string) error {
+func (d *DB) Backup(ctx context.Context, dst string) (err error) {
+	defer d.auditDeferred("Backup", ctx, map[string]any{"dst": dst}, &err)()
 	f, err := os.Create(dst)
 	if err != nil {
 		return fmt.Errorf("Backup: create %s: %w", dst, err)
@@ -1169,7 +1218,9 @@ func (d *DB) Backup(ctx context.Context, dst string) error {
 // After loading, we advance the local timestamp counter past the backup's
 // high-water mark, refresh the posting cache (the old in-memory entries
 // point at keys that Prepare dropped), and reload the schema state.
-func (d *DB) RestoreFrom(_ context.Context, src string) error {
+func (d *DB) RestoreFrom(ctx context.Context, src string) (err error) {
+	defer d.auditDeferred("RestoreFrom", ctx, map[string]any{"src": src}, &err)()
+	_ = ctx // ctx is consumed by auditDeferred; the body below doesn't need it
 	f, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("RestoreFrom: open %s: %w", src, err)

@@ -95,7 +95,11 @@ type MasterManifest struct {
 // BackupTo produces an upstream-compatible multi-file backup under opts.Dir.
 // On success, the directory contains an updated manifest.json plus a new
 // per-backup subdirectory with the snappy-framed KVList stream.
-func (d *DB) BackupTo(ctx context.Context, opts BackupOptions) (*Manifest, error) {
+func (d *DB) BackupTo(ctx context.Context, opts BackupOptions) (man *Manifest, err error) {
+	defer d.auditDeferred("BackupTo", ctx, map[string]any{
+		"dir":  opts.Dir,
+		"type": string(opts.Type),
+	}, &err)()
 	if opts.Dir == "" {
 		return nil, fmt.Errorf("BackupTo: Dir is required")
 	}
@@ -116,7 +120,7 @@ func (d *DB) BackupTo(ctx context.Context, opts BackupOptions) (*Manifest, error
 		readTs = w
 	}
 
-	man := &Manifest{
+	man = &Manifest{
 		Type:           string(opts.Type),
 		ReadTs:         readTs,
 		Version:        manifestVersion,
@@ -299,7 +303,8 @@ func splitNamespacedAttr(p string) (ns []byte, attr string) {
 // Unlike RestoreFrom (which calls Badger Load and wipes existing data), this
 // function applies on top of whatever is already in the DB. Call db.DropAll
 // first if a clean slate is needed.
-func (d *DB) RestoreFromManifest(ctx context.Context, dir string) error {
+func (d *DB) RestoreFromManifest(ctx context.Context, dir string) (err error) {
+	defer d.auditDeferred("RestoreFromManifest", ctx, map[string]any{"dir": dir}, &err)()
 	master, err := readMasterManifest(dir)
 	if err != nil {
 		return err

@@ -36,6 +36,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/qiangli/dgraph2/pkg/audit"
 	"github.com/qiangli/dgraph2/pkg/dgraph2"
 	"github.com/qiangli/dgraph2/pkg/graphql"
 )
@@ -71,15 +72,29 @@ func main() {
 	traceStdout := flag.Bool("trace-stdout", false, "emit OpenTelemetry traces to stdout")
 	traceOTLPHTTP := flag.Bool("trace-otlp-http", false, "emit OpenTelemetry traces via OTLP/HTTP")
 	traceOTLPGRPC := flag.Bool("trace-otlp-grpc", false, "emit OpenTelemetry traces via OTLP/gRPC")
+	traceJaeger := flag.String("trace-jaeger", "", "send traces to a Jaeger collector at host:port (Jaeger 1.35+ accepts OTLP/gRPC natively); shortcut for --trace-otlp-grpc --trace-endpoint <host:port> --trace-insecure")
 	traceEndpoint := flag.String("trace-endpoint", "", "OTLP exporter endpoint host:port (default: localhost:4318 for HTTP, localhost:4317 for gRPC; OTEL_EXPORTER_OTLP_ENDPOINT also honoured)")
 	traceInsecure := flag.Bool("trace-insecure", true, "skip TLS for OTLP exporters")
 	traceServiceName := flag.String("trace-service-name", "dgraph2", "service.name resource attribute")
+	auditLogPath := flag.String("audit-log", "", "audit log file path (JSON lines); empty disables auditing")
 	flag.Parse()
 
 	// Wire viper for env (DGRAPH2_*) + optional YAML config.
 	// Precedence: explicit CLI flag > env > YAML > flag default.
 	if err := loadConfig(*configFile); err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	// --trace-jaeger is a preset: enable OTLP/gRPC to the supplied endpoint
+	// with TLS disabled, since Jaeger collectors typically run on the local
+	// network. Explicit --trace-otlp-grpc / --trace-endpoint still wins
+	// when set together with --trace-jaeger.
+	if *traceJaeger != "" {
+		*traceOTLPGRPC = true
+		*traceInsecure = true
+		if *traceEndpoint == "" {
+			*traceEndpoint = *traceJaeger
+		}
 	}
 
 	// Wire an OpenTelemetry tracer provider. dgraph2 has otel imports
@@ -102,7 +117,17 @@ func main() {
 			*traceStdout, *traceOTLPHTTP, *traceOTLPGRPC, *traceEndpoint)
 	}
 
-	db, err := dgraph2.Open(dgraph2.Options{Dir: *dir})
+	var auditLogger *audit.Logger
+	if *auditLogPath != "" {
+		auditLogger, err = audit.Open(*auditLogPath)
+		if err != nil {
+			log.Fatalf("audit.Open %s: %v", *auditLogPath, err)
+		}
+		defer func() { _ = auditLogger.Close() }()
+		log.Printf("audit log: %s", *auditLogPath)
+	}
+
+	db, err := dgraph2.Open(dgraph2.Options{Dir: *dir, AuditLog: auditLogger})
 	if err != nil {
 		log.Fatalf("dgraph2.Open: %v", err)
 	}
