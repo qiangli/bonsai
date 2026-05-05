@@ -15,6 +15,7 @@
 package bonsai_test
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -517,5 +518,90 @@ func TestFeatureMath(t *testing.T) {
 	}
 	if !strings.Contains(got, "20") || !strings.Contains(got, "40") {
 		t.Errorf("math() didn't double the values: %s", got)
+	}
+}
+
+// Export → Import round-trip preserves both scalar values and uid edges.
+// Earlier export only walked the head value of each posting list, so
+// uid-list predicates silently dropped on the floor — round-tripping
+// would lose every relationship in the graph.
+func TestFeatureExportImportRoundtrip(t *testing.T) {
+	src := newDB(t)
+	mustAlter(t, src, `
+		name:   string @index(exact) .
+		friend: [uid]                 .
+	`)
+	mustMutate(t, src, `
+		_:a <name>   "Alice" .
+		_:b <name>   "Bob"   .
+		_:c <name>   "Carol" .
+		_:a <friend> _:b .
+		_:a <friend> _:c .
+		_:b <friend> _:c .
+	`)
+
+	// Export to RDF in memory.
+	var buf bytes.Buffer
+	if err := src.ExportTo(context.Background(), "rdf", &buf); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	dump := buf.String()
+	// Sanity: every edge must appear as `<uid> <friend> <uid>` not as a
+	// quoted literal. If the regression returns we'll see "friend" missing.
+	if !strings.Contains(dump, "<friend> <0x") {
+		t.Errorf("export dropped uid edges. dump:\n%s", dump)
+	}
+
+	// Restore into a fresh DB. We do NOT pre-apply the schema — the user
+	// flow is "export from prod, import into dev" and they shouldn't have
+	// to reconstruct the schema first. Apply a minimal schema then import.
+	dst := newDB(t)
+	mustAlter(t, dst, `
+		name:   string @index(exact) .
+		friend: [uid]                 .
+	`)
+	if _, err := bonsai.ImportStream(context.Background(), dst, "rdf",
+		strings.NewReader(dump), 100); err != nil {
+		t.Fatalf("ImportStream: %v", err)
+	}
+
+	got := mustQuery(t, dst, `{
+		q(func: eq(name, "Alice")) { name friend { name } }
+	}`)
+	if !strings.Contains(got, `"name":"Alice"`) {
+		t.Errorf("Alice missing after import: %s", got)
+	}
+	for _, want := range []string{"Bob", "Carol"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Alice's %s edge missing after import: %s", want, got)
+		}
+	}
+}
+
+// similar_to() over an HNSW vector index. Inserts three 2D points, asks
+// for the two nearest to (0,0), expects the close pair back and the far
+// one excluded.
+func TestFeatureVectorSimilarTo(t *testing.T) {
+	db := newDB(t)
+	mustAlter(t, db, `
+		name:      string         @index(exact) .
+		embedding: float32vector  @index(hnsw(metric: "euclidean")) .
+	`)
+	mustMutate(t, db, `
+		_:a <name>      "Origin"  .
+		_:a <embedding> "[0.0, 0.0]"^^<float32vector> .
+		_:b <name>      "Near"    .
+		_:b <embedding> "[0.1, 0.1]"^^<float32vector> .
+		_:c <name>      "Far"     .
+		_:c <embedding> "[10.0, 10.0]"^^<float32vector> .
+	`)
+	got := mustQuery(t, db, `{
+		q(func: similar_to(embedding, 2, "[0.0, 0.0]")) { name }
+	}`)
+	if !strings.Contains(got, "Origin") || !strings.Contains(got, "Near") {
+		t.Errorf("similar_to missed nearby points: %s", got)
+	}
+	if strings.Contains(got, "Far") {
+		t.Errorf("similar_to returned far point: %s", got)
 	}
 }

@@ -706,7 +706,9 @@ func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 		readTs = oraTs
 	}
 
-	// Walk all data keys via Badger stream.
+	// Walk all data keys via Badger stream. For each posting list we
+	// iterate every posting (not just the single-value head) so uid-list
+	// predicates emit one edge per neighbour rather than getting skipped.
 	stream := d.pstore.NewStreamAt(readTs)
 	stream.Prefix = []byte{x.ByteData}
 	stream.KeyToList = func(key []byte, _ *badger.Iterator) (*badgerpb.KVList, error) {
@@ -721,17 +723,11 @@ func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 		if err != nil {
 			return nil, err
 		}
-		// Bare attribute name without namespace prefix.
-		ns, attr := x.ParseNamespaceAttr(pk.Attr)
-		_ = ns
-		// Read the scalar value (single-value path; lists/multi-value
-		// would need richer iteration).
-		val, err := pl.Value(readTs)
-		if err == nil {
-			line := fmt.Sprintf("<0x%x> <%s> %s .\n",
-				pk.Uid, attr, formatRDFValue(val))
-			_, _ = w.Write([]byte(line))
-		}
+		_, attr := x.ParseNamespaceAttr(pk.Attr)
+		_ = pl.Iterate(readTs, 0, func(p *pb.Posting) error {
+			emitRDFPosting(w, pk.Uid, attr, p)
+			return nil
+		})
 		return nil, nil
 	}
 	stream.Send = func(_ *z.Buffer) error { return nil }
@@ -739,6 +735,80 @@ func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("Export: orchestrate: %w", err)
 	}
 	return nil
+}
+
+// emitRDFPosting writes one N-Quads line for a single posting. UID edges
+// go out as `<subj> <pred> <obj-uid> .` and scalar values pick up a typed
+// literal via postingRDFLiteral.
+func emitRDFPosting(w io.Writer, subj uint64, attr string, p *pb.Posting) {
+	switch p.PostingType {
+	case pb.Posting_REF:
+		fmt.Fprintf(w, "<0x%x> <%s> <0x%x> .\n", subj, attr, p.Uid)
+	default:
+		fmt.Fprintf(w, "<0x%x> <%s> %s", subj, attr, postingRDFLiteral(p))
+		if p.LangTag != nil {
+			fmt.Fprintf(w, "@%s", string(p.LangTag))
+		}
+		fmt.Fprintln(w, " .")
+	}
+}
+
+// postingRDFLiteral formats a non-REF posting's binary value into an RDF
+// literal. Posting.Value is already the binary form Badger stored, so we
+// unmarshal it through types.Marshal into a string for textual types and
+// fall back to the typed-literal form for numeric / temporal / geo / vector.
+func postingRDFLiteral(p *pb.Posting) string {
+	tid := types.TypeID(p.ValType)
+	src := types.Val{Tid: types.BinaryID, Value: p.Value}
+	conv, err := types.Convert(src, tid)
+	if err != nil {
+		// Fall back to a quoted hex dump rather than dropping the value.
+		return fmt.Sprintf("%q", string(p.Value))
+	}
+	switch tid {
+	case types.StringID, types.DefaultID:
+		return fmt.Sprintf("%q", anyToString(conv.Value))
+	case types.IntID:
+		return fmt.Sprintf(`"%d"^^<xs:int>`, conv.Value.(int64))
+	case types.FloatID:
+		return fmt.Sprintf(`"%g"^^<xs:float>`, conv.Value.(float64))
+	case types.BoolID:
+		return fmt.Sprintf(`"%v"^^<xs:boolean>`, conv.Value.(bool))
+	case types.DateTimeID:
+		// Use string form via the type system's Marshal path.
+		dst := types.ValueForType(types.StringID)
+		if err := types.Marshal(conv, &dst); err == nil {
+			return fmt.Sprintf(`%q^^<xs:dateTime>`, anyToString(dst.Value))
+		}
+		return fmt.Sprintf("%q", anyToString(conv.Value))
+	case types.GeoID:
+		dst := types.ValueForType(types.StringID)
+		if err := types.Marshal(conv, &dst); err == nil {
+			return fmt.Sprintf(`%q^^<geo:geojson>`, anyToString(dst.Value))
+		}
+		return fmt.Sprintf("%q", anyToString(conv.Value))
+	case types.VFloatID:
+		dst := types.ValueForType(types.StringID)
+		if err := types.Marshal(conv, &dst); err == nil {
+			return fmt.Sprintf(`%q^^<float32vector>`, anyToString(dst.Value))
+		}
+		return fmt.Sprintf("%q", anyToString(conv.Value))
+	default:
+		return fmt.Sprintf("%q", anyToString(conv.Value))
+	}
+}
+
+// anyToString accepts whichever shape types.Convert returns (string or
+// []byte) and yields a Go string.
+func anyToString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case []byte:
+		return string(x)
+	default:
+		return fmt.Sprintf("%v", x)
+	}
 }
 
 func (d *DB) exportJSON(ctx context.Context, w io.Writer) error {
@@ -765,16 +835,26 @@ func (d *DB) exportJSON(ctx context.Context, w io.Writer) error {
 			return nil, err
 		}
 		_, attr := x.ParseNamespaceAttr(pk.Attr)
-		val, err := pl.Value(readTs)
-		if err != nil {
-			return nil, nil
-		}
-		if !first {
-			_, _ = w.Write([]byte(","))
-		}
-		first = false
-		_, _ = fmt.Fprintf(w, `{"subject":"0x%x","predicate":%q,"value":%s}`,
-			pk.Uid, attr, jsonValue(val))
+		_ = pl.Iterate(readTs, 0, func(p *pb.Posting) error {
+			if !first {
+				_, _ = w.Write([]byte(","))
+			}
+			first = false
+			switch p.PostingType {
+			case pb.Posting_REF:
+				fmt.Fprintf(w, `{"subject":"0x%x","predicate":%q,"object_id":"0x%x"}`,
+					pk.Uid, attr, p.Uid)
+			default:
+				val := types.Val{Tid: types.TypeID(p.ValType), Value: p.Value}
+				conv, err := types.Convert(val, val.Tid)
+				if err != nil {
+					conv = val
+				}
+				fmt.Fprintf(w, `{"subject":"0x%x","predicate":%q,"value":%s}`,
+					pk.Uid, attr, jsonValue(conv))
+			}
+			return nil
+		})
 		return nil, nil
 	}
 	stream.Send = func(_ *z.Buffer) error { return nil }

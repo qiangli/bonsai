@@ -363,6 +363,8 @@ var typeMap = map[string]types.TypeID{
 	"xs:decimal":         types.BigFloatID,
 	"geo:geojson":        types.GeoID,
 	"xs:[]float32":       types.VFloatID,
+	"float32vector":      types.VFloatID, // bonsai alias matching the schema-language type name
+
 	"http://www.w3.org/2001/XMLSchema#string":          types.StringID,
 	"http://www.w3.org/2001/XMLSchema#dateTime":        types.DateTimeID,
 	"http://www.w3.org/2001/XMLSchema#date":            types.DateTimeID,
