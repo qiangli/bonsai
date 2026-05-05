@@ -339,31 +339,35 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 	}
 	resp := &api.Response{Uids: map[string]string{}}
 
-	var nquads []*apipb.NQuad
+	type taggedNQ struct {
+		q      *apipb.NQuad
+		delete bool
+	}
+	var nquads []taggedNQ
 	if len(m.SetNquads) > 0 {
 		nq, _, err := chunker.ParseRDFs(m.SetNquads)
 		if err != nil {
 			return nil, fmt.Errorf("Mutate: parse SetNquads: %w", err)
 		}
-		nquads = append(nquads, nq...)
+		for _, q := range nq {
+			nquads = append(nquads, taggedNQ{q: q, delete: false})
+		}
 	}
 	if len(m.DelNquads) > 0 {
 		nq, _, err := chunker.ParseRDFs(m.DelNquads)
 		if err != nil {
 			return nil, fmt.Errorf("Mutate: parse DelNquads: %w", err)
 		}
-		// Tag deletions; runMutation distinguishes by edge.Op below.
 		for _, q := range nq {
-			nquads = append(nquads, q)
+			nquads = append(nquads, taggedNQ{q: q, delete: true})
 		}
-		_ = nq
 	}
 
 	// Substitute blank-node references with fresh UIDs.
 	xidMap := map[string]uint64{}
 	var blanks []string
-	for _, q := range nquads {
-		for _, key := range []string{q.Subject, q.ObjectId} {
+	for _, t := range nquads {
+		for _, key := range []string{t.q.Subject, t.q.ObjectId} {
 			if isBlankNode(key) {
 				if _, ok := xidMap[key]; !ok {
 					xidMap[key] = 0 // placeholder
@@ -385,16 +389,16 @@ func (d *DB) Mutate(ctx context.Context, m *api.Mutation) (*api.Response, error)
 
 	// Build edges; route through worker.MutateOverNetwork.
 	mutations := &pb.Mutations{}
-	for _, q := range nquads {
-		dq := dql.NQuad{NQuad: q}
+	for _, t := range nquads {
+		dq := dql.NQuad{NQuad: t.q}
 		edge, err := dq.ToEdgeUsing(xidMap)
 		if err != nil {
 			return nil, fmt.Errorf("Mutate: edge: %w", err)
 		}
-		// Mark the predicate with the namespace prefix (always 0 in dgraph2).
 		edge.Attr = x.NamespaceAttr(x.RootNamespace, edge.Attr)
-		// dql.ToEdgeUsing returns edge.Op = SET by default; we'd toggle DEL
-		// here once we differentiate Set/DelNquads above.
+		if t.delete {
+			edge.Op = pb.DirectedEdge_DEL
+		}
 		mutations.Edges = append(mutations.Edges, edge)
 	}
 

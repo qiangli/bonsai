@@ -367,6 +367,217 @@ func TestDQLQuery(t *testing.T) {
 	t.Logf("DQL response: %s", string(resp.Json))
 }
 
+// TestDQLFilters exercises filter functions: ge, le, has.
+func TestDQLFilters(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := db.Alter(ctx,
+		"name: string @index(exact) .\nage: int @index(int) .\n"); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:a <name> "Alice" .
+		_:a <age> "30"^^<xs:int> .
+		_:b <name> "Bob" .
+		_:b <age> "25"^^<xs:int> .
+		_:c <name> "Carol" .
+		_:c <age> "40"^^<xs:int> .
+	`)}); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+
+	// ge(age, 30) should return Alice + Carol (not Bob).
+	resp, err := db.Query(ctx, `{ q(func: ge(age, 30)) { name age } }`)
+	if err != nil {
+		t.Fatalf("Query ge: %v", err)
+	}
+	got := string(resp.Json)
+	if !strings.Contains(got, "Alice") || !strings.Contains(got, "Carol") {
+		t.Errorf("ge(age,30) missing Alice/Carol: %s", got)
+	}
+	if strings.Contains(got, "Bob") {
+		t.Errorf("ge(age,30) should not contain Bob: %s", got)
+	}
+
+	// has(age) returns everyone.
+	resp, err = db.Query(ctx, `{ q(func: has(age)) { name } }`)
+	if err != nil {
+		t.Fatalf("Query has: %v", err)
+	}
+	for _, want := range []string{"Alice", "Bob", "Carol"} {
+		if !strings.Contains(string(resp.Json), want) {
+			t.Errorf("has(age) missing %s: %s", want, string(resp.Json))
+		}
+	}
+}
+
+// TestDQLPagination tests first/offset.
+func TestDQLPagination(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := db.Alter(ctx, "name: string @index(exact) .\n"); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+
+	// Insert 5 names that all share an indexable token (use the same exact
+	// name "person" for the index match, but distinct UIDs).
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:p1 <name> "person" .
+		_:p2 <name> "person" .
+		_:p3 <name> "person" .
+		_:p4 <name> "person" .
+		_:p5 <name> "person" .
+	`)}); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+
+	resp, err := db.Query(ctx,
+		`{ q(func: eq(name, "person"), first: 2) { uid name } }`)
+	if err != nil {
+		t.Fatalf("Query first:2: %v", err)
+	}
+	// Count occurrences of `"name":"person"` — must be exactly 2.
+	got := string(resp.Json)
+	count := strings.Count(got, `"name":"person"`)
+	if count != 2 {
+		t.Errorf("first:2 returned %d rows, want 2: %s", count, got)
+	}
+}
+
+// TestDQLDeleteRoundtrip — set, delete, then verify gone.
+func TestDQLDeleteRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := db.Alter(ctx, "name: string @index(exact) .\n"); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+	resp, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:victor <name> "Victor" .
+	`)})
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	uidHex := resp.Uids["victor"]
+	if uidHex == "" {
+		t.Fatalf("no uid for victor")
+	}
+	q1, _ := db.Query(ctx, `{ q(func: eq(name, "Victor")) { name } }`)
+	if !strings.Contains(string(q1.Json), "Victor") {
+		t.Fatalf("pre-delete missing Victor: %s", string(q1.Json))
+	}
+
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{
+		DelNquads: []byte("<" + uidHex + `> <name> "Victor" .`),
+	}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	q2, _ := db.Query(ctx, `{ q(func: eq(name, "Victor")) { name } }`)
+	if strings.Contains(string(q2.Json), "Victor") {
+		t.Errorf("post-delete still has Victor: %s", string(q2.Json))
+	}
+}
+
+// TestDQLEdgeTraversal exercises uid-typed edges and multi-hop traversal:
+// alice knows bob; query for alice's friends should expand the edge.
+func TestDQLEdgeTraversal(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := db.Alter(ctx,
+		"name: string @index(exact) .\nfriend: [uid] .\n"); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+	resp, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:alice <name>   "Alice" .
+		_:bob   <name>   "Bob" .
+		_:alice <friend> _:bob .
+	`)})
+	if err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	t.Logf("Uids: %v", resp.Uids)
+
+	q := `{
+		q(func: eq(name, "Alice")) {
+			name
+			friend {
+				name
+			}
+		}
+	}`
+	r, err := db.Query(ctx, q)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if !strings.Contains(string(r.Json), `"name":"Alice"`) {
+		t.Errorf("missing Alice: %s", string(r.Json))
+	}
+	if !strings.Contains(string(r.Json), `"name":"Bob"`) {
+		t.Errorf("friend->Bob not traversed: %s", string(r.Json))
+	}
+	t.Logf("traversal: %s", string(r.Json))
+}
+
+// TestDQLCount exercises `count(predicate)`.
+func TestDQLCount(t *testing.T) {
+	dir := t.TempDir()
+	db, err := dgraph2.Open(dgraph2.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+
+	if err := db.Alter(ctx,
+		"name: string @index(exact) .\nfriend: [uid] @count .\n"); err != nil {
+		t.Fatalf("Alter: %v", err)
+	}
+	if _, err := db.Mutate(ctx, &apiproto.Mutation{SetNquads: []byte(`
+		_:a <name>   "A" .
+		_:b <name>   "B" .
+		_:c <name>   "C" .
+		_:a <friend> _:b .
+		_:a <friend> _:c .
+	`)}); err != nil {
+		t.Fatalf("Mutate: %v", err)
+	}
+	r, err := db.Query(ctx, `{
+		q(func: eq(name, "A")) {
+			count(friend)
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if !strings.Contains(string(r.Json), `"count(friend)":2`) {
+		t.Errorf("count(friend) wrong: %s", string(r.Json))
+	}
+}
+
 // TestZeroUidRejected verifies the documented invariant that subject UID
 // zero is rejected on Set and Get.
 func TestZeroUidRejected(t *testing.T) {
