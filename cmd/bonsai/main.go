@@ -115,6 +115,12 @@ func main() {
 		// `bonsai import-gfy <repo-or-graph.json>` — one-shot ingest of
 		// a gfy code-knowledge graph. Local-only (opens DB directly).
 		runWithArgv("bonsai import-gfy", rest, tools.ImportGfyMain)
+	case sub == "explore":
+		// `bonsai explore <path>` — link gfy in-process, build the
+		// code-knowledge graph for <path>, ingest into a bonsai DB,
+		// and start the Explorer server. End-to-end "open this repo
+		// in Bonsai" in one command.
+		runWithArgv("bonsai explore", rest, tools.ExploreMain)
 	case cliSubs[sub]:
 		// Re-include the subcommand so cli's own dispatch sees it as
 		// flag.Args()[0].
@@ -173,6 +179,11 @@ local utilities:
                                format, ingests, enriches the inferred
                                schema with @reverse / @index where
                                predicate names match common conventions.
+  explore <path>               build the code-knowledge graph for <path>
+                               with gfy (linked in-process), ingest into
+                               a bonsai data dir, and start the Explorer
+                               UI. End-to-end "open this codebase in
+                               Bonsai" in one command.
 
 other:
   version                      print the bonsai version

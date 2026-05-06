@@ -46,3 +46,6 @@ vendor
 /dgraph2-bulk
 /dgraph2-live
 /.gfy-out/
+# .bonsai-data/ is the default --dir for `bonsai explore .` against the repo
+# itself. Keep it local so the demo is one-command without polluting commits.
+/.bonsai-data/

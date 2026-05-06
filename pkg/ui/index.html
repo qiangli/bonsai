@@ -1,45 +1,139 @@
 <!DOCTYPE html>
 <!--
-  bonsai Explorer — minimal single-page UI for DB introspection.
-  Vanilla HTML+JS, no build, no framework. Embedded via go:embed and
-  served at / by bonsai-server. Talks only to the same-origin endpoints
-  (/admin/schema, /admin/state, /query, /graphql), so there are no CORS
-  or auth surprises beyond what the surrounding deployment already does.
+  Bonsai Explorer — file-manager-style UI for clickless DB exploration.
+  Vanilla HTML+JS, no build step. Embedded via go:embed and served at /
+  by bonsai-server. All requests are same-origin (/admin/schema, /query).
+
+  Three panes:
+    sidebar  — types, indexed predicates, "All nodes", DQL escape hatch
+    middle   — breadcrumb + sortable table (or graph / JSON view)
+    detail   — selected-row attributes + clickable outgoing/incoming edges
+
+  No textarea required to drive exploration: every row, every edge count,
+  every type/predicate in the sidebar is a click that produces a new query.
+  Power users can still drop into raw DQL via the "Advanced" panel.
 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Bonsai Explorer</title>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
   <style>
+    /* Dark theme palette inspired by gfy's graph.html — same general vibe so
+       the eye-transition between gfy view and bonsai is smooth, but every
+       byte here is bonsai (no gfy assets, no gfy code). */
+    :root {
+      --bg: #0f0f1a;
+      --panel: #1a1a2e;
+      --panel-2: #15152a;
+      --border: #2a2a4e;
+      --border-soft: #232342;
+      --text: #e0e0e0;
+      --text-dim: #aaa;
+      --text-muted: #777;
+      --accent: #4E79A7;
+      --accent-hi: #6090c0;
+      --selected: #2a3a5e;
+      --hover: #232b48;
+      --err: #E15759;
+      --ok: #59A14F;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; color: #222; background: #fafafa; }
-    header { background: #1a1f29; color: #f0f0f0; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; }
-    header h1 { margin: 0; font-size: 16px; font-weight: 600; }
-    header .meta { font-size: 12px; opacity: 0.7; }
-    main { display: grid; grid-template-columns: 260px 1fr; height: calc(100vh - 44px); }
-    aside { background: #fff; border-right: 1px solid #e5e5e5; overflow-y: auto; padding: 12px 14px; }
-    aside h2 { font-size: 12px; text-transform: uppercase; color: #888; margin: 16px 0 6px 0; letter-spacing: 0.5px; }
-    aside ul { list-style: none; padding: 0; margin: 0; }
-    aside li { padding: 4px 0; cursor: pointer; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; color: #333; word-break: break-all; }
-    aside li:hover { color: #2563eb; }
-    aside li small { color: #888; font-size: 11px; }
-    section.work { display: flex; flex-direction: column; gap: 10px; padding: 12px; min-width: 0; }
-    .panel { background: #fff; border: 1px solid #e5e5e5; border-radius: 4px; }
-    .panel header { background: #f0f2f5; color: #444; padding: 6px 10px; border-bottom: 1px solid #e5e5e5; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; justify-content: space-between; align-items: center; }
-    .panel header .actions { display: flex; gap: 6px; }
-    .panel header button, .panel header select, .panel header input { font-size: 12px; padding: 3px 8px; border: 1px solid #d0d0d0; border-radius: 3px; background: #fff; cursor: pointer; }
-    .panel header button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-    .panel header button:hover { background: #f5f5f5; }
-    .panel header button.primary:hover { background: #1d4ed8; }
-    textarea, pre { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
-    textarea { width: 100%; border: none; outline: none; resize: vertical; padding: 10px; min-height: 140px; }
-    pre.result { padding: 10px; margin: 0; max-height: 50vh; overflow: auto; background: #fafafa; }
-    .filter-row { display: flex; gap: 6px; padding: 8px 10px; align-items: center; border-bottom: 1px solid #e5e5e5; flex-wrap: wrap; }
-    .filter-row label { font-size: 12px; color: #555; }
-    .filter-row select, .filter-row input { font-size: 13px; padding: 4px 6px; border: 1px solid #ccc; border-radius: 3px; }
-    .status { font-size: 12px; color: #666; padding: 4px 10px; }
-    .status.error { color: #b91c1c; }
-    .tag { display: inline-block; background: #eef; color: #335; padding: 1px 6px; border-radius: 3px; font-size: 11px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: var(--text); background: var(--bg); }
+    header { background: #08081a; color: var(--text); padding: 9px 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+    header h1 { margin: 0; font-size: 15px; font-weight: 600; color: var(--accent-hi); }
+    header .meta { font-size: 12px; color: var(--text-dim); }
+    header select { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 2px 4px; border-radius: 3px; font-size: 12px; }
+    main { display: grid; grid-template-columns: 220px 1fr 280px; height: calc(100vh - 40px); }
+
+    /* sidebar */
+    aside.sidebar { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; padding: 10px 0; display: flex; flex-direction: column; }
+    aside.sidebar h2 { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin: 14px 12px 4px; letter-spacing: 0.6px; }
+    aside.sidebar ul, aside.sidebar nav { list-style: none; padding: 0; margin: 0; }
+    aside.sidebar li, aside.sidebar .nav-item {
+      padding: 4px 12px; cursor: pointer; font-size: 12px; color: var(--text); word-break: break-all;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+    }
+    aside.sidebar li:hover, aside.sidebar .nav-item:hover { background: var(--hover); color: var(--accent-hi); }
+    aside.sidebar li.active, aside.sidebar .nav-item.active { background: var(--accent); color: #fff; }
+    aside.sidebar li small { color: var(--text-muted); font-size: 10px; }
+    aside.sidebar li.active small { color: #d0e0f0; }
+    aside.sidebar .nav-item { display: block; border: none; background: none; text-align: left; width: 100%; }
+    aside.sidebar details { margin: auto 8px 6px; padding: 0; }
+    aside.sidebar details summary { font-size: 11px; text-transform: uppercase; color: var(--text-muted); padding: 6px 4px; cursor: pointer; letter-spacing: 0.6px; }
+    aside.sidebar details summary:hover { color: var(--accent-hi); }
+    aside.sidebar details textarea { width: 100%; height: 90px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; padding: 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--panel-2); color: var(--text); }
+    aside.sidebar details button { margin-top: 4px; padding: 4px 10px; font-size: 12px; background: var(--accent); color: #fff; border: 0; border-radius: 3px; cursor: pointer; }
+    aside.sidebar details button:hover { background: var(--accent-hi); }
+
+    /* middle pane */
+    section.middle { display: flex; flex-direction: column; min-width: 0; background: var(--bg); border-right: 1px solid var(--border); }
+    .toolbar { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--panel); }
+    .toolbar button { background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; cursor: pointer; padding: 2px 8px; font-size: 13px; color: var(--text); }
+    .toolbar button:hover:not(:disabled) { background: var(--hover); border-color: var(--accent); color: var(--accent-hi); }
+    .toolbar button:disabled { color: var(--text-muted); cursor: not-allowed; }
+    #breadcrumb { font-size: 12px; color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    #breadcrumb .crumb { cursor: pointer; }
+    #breadcrumb .crumb:hover { color: var(--accent-hi); text-decoration: underline; }
+    #breadcrumb .crumb.current { color: var(--text); font-weight: 600; cursor: default; text-decoration: none; }
+    #breadcrumb .sep { color: var(--text-muted); padding: 0 4px; }
+
+    .view-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+    .view-tab { background: none; border: none; padding: 6px 14px; font-size: 11px; cursor: pointer; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; border-right: 1px solid var(--border); }
+    .view-tab.active { color: var(--text); font-weight: 600; background: var(--bg); border-bottom: 2px solid var(--accent); margin-bottom: -1px; }
+    .view-tab:hover:not(.active) { color: var(--accent-hi); }
+    .view-pane { display: none; flex: 1; min-height: 0; overflow: hidden; flex-direction: column; }
+    .view-pane.active { display: flex; }
+
+    /* table */
+    #data-table-wrap { flex: 1; overflow: auto; background: var(--bg); }
+    table#data-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    table#data-table thead th { position: sticky; top: 0; background: var(--panel); padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); font-weight: 600; color: var(--text-dim); z-index: 1; cursor: pointer; user-select: none; }
+    table#data-table thead th:hover { background: var(--hover); color: var(--accent-hi); }
+    table#data-table thead th.sort-asc::after { content: " ▲"; color: var(--accent); font-size: 9px; }
+    table#data-table thead th.sort-desc::after { content: " ▼"; color: var(--accent); font-size: 9px; }
+    table#data-table tbody td { padding: 4px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: top; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--text); }
+    table#data-table tbody td.uid { color: var(--text-muted); }
+    table#data-table tbody tr { cursor: pointer; }
+    table#data-table tbody tr:hover { background: var(--hover); }
+    table#data-table tbody tr.selected { background: var(--selected); }
+    table#data-table tbody td .badge { display: inline-block; background: var(--accent); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 10px; min-width: 16px; text-align: center; }
+
+    .pagination { padding: 6px 10px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; background: var(--panel); font-size: 12px; color: var(--text-dim); }
+    .pagination button { background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; padding: 2px 8px; cursor: pointer; font-size: 12px; color: var(--text); }
+    .pagination button:hover:not(:disabled) { background: var(--hover); border-color: var(--accent); color: var(--accent-hi); }
+    .pagination button:disabled { color: var(--text-muted); cursor: not-allowed; }
+
+    .status { padding: 4px 10px; font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-soft); background: var(--panel-2); }
+    .status.error { color: var(--err); }
+
+    /* graph */
+    #view-graph { background: #08081a; }
+    .graph-tools { padding: 6px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; background: var(--panel); font-size: 12px; color: var(--text-dim); }
+    .graph-tools button { background: var(--accent); color: #fff; border: 0; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+    .graph-tools button:hover:not(:disabled) { background: var(--accent-hi); }
+    .graph-tools button:disabled { background: var(--border); color: var(--text-muted); cursor: not-allowed; }
+    .graph-tools input[type="number"] { width: 70px; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 2px 4px; font-size: 12px; }
+    .graph-tools label { color: var(--text-dim); }
+    #graph-canvas { width: 100%; height: 100%; min-height: 300px; flex: 1; background: #08081a; }
+
+    /* json */
+    pre.result { padding: 10px; margin: 0; flex: 1; overflow: auto; background: var(--bg); color: var(--text); font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+
+    /* detail */
+    aside.detail { background: var(--panel); overflow-y: auto; padding: 12px 14px; font-size: 12px; color: var(--text); }
+    aside.detail h3 { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin: 14px 0 6px 0; letter-spacing: 0.6px; border-bottom: 1px solid var(--border-soft); padding-bottom: 4px; }
+    aside.detail h3:first-of-type { margin-top: 0; }
+    aside.detail .title { font-size: 14px; font-weight: 600; color: var(--accent-hi); margin-bottom: 4px; word-break: break-all; }
+    aside.detail .uid { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+    aside.detail .field { padding: 3px 0; word-break: break-word; line-height: 1.4; }
+    aside.detail .field b { color: var(--text); font-weight: 600; }
+    aside.detail .field .v { color: var(--text-dim); font-family: ui-monospace, Menlo, Consolas, monospace; }
+    aside.detail .edge-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px; cursor: pointer; border-radius: 3px; margin: 2px 0; }
+    aside.detail .edge-row:hover { background: var(--hover); color: var(--accent-hi); }
+    aside.detail .edge-row .pred { font-family: ui-monospace, Menlo, Consolas, monospace; }
+    aside.detail .edge-row .badge { background: var(--accent); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 10px; min-width: 16px; text-align: center; }
+    aside.detail .empty { color: var(--text-muted); font-style: italic; }
   </style>
 </head>
 <body>
@@ -52,217 +146,719 @@
     </div>
   </header>
   <main>
-    <aside>
+    <aside class="sidebar">
+      <nav>
+        <button id="nav-all" class="nav-item">All nodes</button>
+      </nav>
+      <h2>Types</h2>
+      <ul id="type-list"><li><small>(none)</small></li></ul>
       <h2>Predicates</h2>
       <ul id="schema-list"><li><small>loading…</small></li></ul>
-      <h2>Types</h2>
-      <ul id="type-list"><li><small>loading…</small></li></ul>
+      <details id="advanced-panel">
+        <summary>Advanced (DQL)</summary>
+        <textarea id="query-text" placeholder='{ q(func: has(label), first: 10) {
+  uid label
+} }'></textarea>
+        <button id="query-run">Run ▶</button>
+      </details>
     </aside>
-    <section class="work">
-      <div class="panel">
-        <header>
-          <span>Quick Filter</span>
-        </header>
-        <div class="filter-row">
-          <label>predicate</label>
-          <select id="filter-pred"><option value="">(pick one)</option></select>
-          <label>op</label>
-          <select id="filter-op">
-            <option value="has">has(p)</option>
-            <option value="eq">eq(p, v)</option>
-            <option value="ge">ge(p, v)</option>
-            <option value="le">le(p, v)</option>
-          </select>
-          <label>value</label>
-          <input id="filter-val" placeholder="(value, only for eq/ge/le)" size="22">
-          <label>limit</label>
-          <input id="filter-limit" type="number" value="50" min="1" max="10000" style="width: 70px">
-          <button id="filter-run" class="">Build &amp; Run</button>
+    <section class="middle">
+      <div class="toolbar">
+        <button id="nav-back" title="Back" disabled>◀</button>
+        <button id="nav-fwd"  title="Forward" disabled>▶</button>
+        <button id="nav-home" title="All nodes">⌂</button>
+        <span id="breadcrumb"></span>
+      </div>
+      <div class="view-tabs">
+        <button class="view-tab active" data-view="table">Table</button>
+        <button class="view-tab" data-view="graph">Graph</button>
+        <button class="view-tab" data-view="json">JSON</button>
+      </div>
+      <div id="view-table" class="view-pane active">
+        <div id="data-table-wrap">
+          <table id="data-table"><thead></thead><tbody></tbody></table>
         </div>
+        <div class="pagination">
+          <button id="page-prev" disabled>◀ Prev</button>
+          <span id="page-label">—</span>
+          <button id="page-next" disabled>Next ▶</button>
+        </div>
+        <div id="status" class="status">ready</div>
       </div>
-
-      <div class="panel">
-        <header>
-          <span>Query (DQL)</span>
-          <div class="actions">
-            <button id="query-clear">Clear</button>
-            <button id="query-run" class="primary">Run ▶</button>
-          </div>
-        </header>
-        <textarea id="query-text">{ q(func: has(name), first: 10) {
-  uid
-  name
-} }</textarea>
-        <div class="status" id="query-status"></div>
+      <div id="view-graph" class="view-pane">
+        <div class="graph-tools">
+          <span>Scope:</span>
+          <button id="graph-render-page" class="active">Current page</button>
+          <button id="graph-render-all">Render all</button>
+          <span style="margin-left: 12px;">cap:</span>
+          <input type="number" id="graph-cap" value="2000" min="50" max="20000" step="100">
+          <span id="graph-status" style="margin-left: auto; font-size: 11px;"></span>
+        </div>
+        <div id="graph-canvas"></div>
       </div>
-
-      <div class="panel">
-        <header>
-          <span>Result</span>
-          <div class="actions">
-            <button id="copy-result">Copy</button>
-          </div>
-        </header>
+      <div id="view-json" class="view-pane">
         <pre id="result" class="result">(no query yet)</pre>
       </div>
     </section>
+    <aside class="detail">
+      <div id="detail-pane">
+        <span class="empty">Click a row to inspect.</span>
+      </div>
+    </aside>
   </main>
 
 <script>
 'use strict';
-
-// Helpers — same-origin fetch wrappers and small DOM utilities.
 const $ = id => document.getElementById(id);
+const PAGE_SIZE = 50;
 
-async function fetchJSON(url, opts) {
-  const resp = await fetch(url, opts);
-  const text = await resp.text();
-  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}: ${text}`);
-  try { return JSON.parse(text); } catch { return text; }
-}
+// ────────────────────────────────────────────────────────────────────
+// Schema cache. Populated once on boot from /admin/schema and refreshed
+// whenever the namespace changes. Drives the sidebar lists, the
+// "expand(_all_)" reverse-edge construction, and the table-column hints.
+// ────────────────────────────────────────────────────────────────────
+const schema = {
+  preds: [],   // [{ name, defn, indexed, list, isUid, reverse }]
+  types: [],   // [{ name, fields: [name,...] }]
+  reverse: [], // [predicate-name] — those with @reverse
+};
 
-// Strip the 8-byte namespace prefix that bonsai adds to every predicate.
-// The schema endpoint returns predicates like "<8 bytes><name>"; for
-// display we only want "name".
+// stripNs trims an 8-byte binary namespace prefix from a predicate name
+// IFF one is present. The /admin/schema endpoint returns plain text with
+// no prefix for the root namespace, so we must only strip when the first
+// byte is non-printable. Earlier versions stripped unconditionally and
+// chopped 8 characters off any predicate name longer than 7 (e.g.
+// `source_location` → `ocation`, `contains` → `""`), which silently
+// corrupted every UI-generated query.
 function stripNs(p) {
-  if (!p) return p;
-  if (p.length < 8) return p;
+  if (!p || p.length < 8) return p;
+  if (p.charCodeAt(0) >= 0x20) return p; // first byte is printable → no prefix
   return p.substring(8);
 }
 
-// loadSchema fetches /admin/schema (text DQL form), parses it into
-// predicate + type lists, and renders them in the sidebar.
 async function loadSchema() {
-  try {
-    const text = await fetchJSON('/admin/schema');
-    const lines = (typeof text === 'string' ? text : '').split('\n');
-    const preds = [];
-    const types = [];
-    let inType = null;
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line || line.startsWith('#')) continue;
-      const typeStart = line.match(/^type\s+(\S+)\s*\{/);
-      if (typeStart) { inType = { name: typeStart[1], fields: [] }; continue; }
-      if (inType) {
-        if (line === '}') { types.push(inType); inType = null; continue; }
-        const fld = line.replace(/[.,]+$/, '').trim();
-        if (fld) inType.fields.push(fld);
-        continue;
-      }
-      // predicate line: "name: type @directives ."
-      const m = line.match(/^([^:]+):\s*([^.]+)\./);
-      if (m) preds.push({ name: stripNs(m[1].trim()), defn: m[2].trim() });
+  const resp = await fetch('/admin/schema');
+  const text = await resp.text();
+  schema.preds = [];
+  schema.types = [];
+  schema.reverse = [];
+  let inType = null;
+  for (const raw of (text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const ts = line.match(/^type\s+(\S+)\s*\{/);
+    if (ts) { inType = { name: ts[1], fields: [] }; continue; }
+    if (inType) {
+      if (line === '}') { schema.types.push(inType); inType = null; continue; }
+      const fld = line.replace(/[.,]+$/, '').trim();
+      if (fld) inType.fields.push(fld.split(/\s+/)[0]);
+      continue;
     }
-    renderPredicates(preds);
-    renderTypes(types);
-    populateFilterPredicates(preds);
-  } catch (e) {
-    $('schema-list').innerHTML = `<li><small style="color:#b91c1c">${e.message}</small></li>`;
+    const m = line.match(/^([^:]+):\s*([^.]+)\./);
+    if (!m) continue;
+    const name = stripNs(m[1].trim());
+    if (name.startsWith('dgraph.')) continue;
+    const defn = m[2].trim();
+    schema.preds.push({
+      name, defn,
+      indexed: defn.includes('@index'),
+      list: defn.startsWith('['),
+      isUid: /\buid\b/.test(defn),
+      reverse: defn.includes('@reverse'),
+    });
+    if (defn.includes('@reverse')) schema.reverse.push(name);
   }
+  renderSidebar();
 }
 
-function renderPredicates(preds) {
-  const ul = $('schema-list');
-  if (!preds.length) { ul.innerHTML = '<li><small>(none)</small></li>'; return; }
-  ul.innerHTML = '';
-  for (const p of preds) {
+function renderSidebar() {
+  const tu = $('type-list');
+  if (!schema.types.length) {
+    tu.innerHTML = '<li><small>(no named types)</small></li>';
+  } else {
+    tu.innerHTML = '';
+    for (const t of schema.types) {
+      const li = document.createElement('li');
+      li.innerHTML = `${t.name} <small>(${t.fields.length})</small>`;
+      li.title = t.fields.join(', ');
+      li.onclick = () => navigate({ kind: 'type', name: t.name });
+      tu.appendChild(li);
+    }
+  }
+  const pu = $('schema-list');
+  pu.innerHTML = '';
+  // Show indexed first (more useful as entry points), then the rest.
+  const ordered = [...schema.preds].sort((a, b) => Number(b.indexed) - Number(a.indexed));
+  for (const p of ordered) {
     const li = document.createElement('li');
+    const tag = p.isUid ? '→' : '·';
+    const note = p.indexed ? '@index' : (p.list ? '[]' : '');
+    li.innerHTML = `${tag} ${p.name} <small>${note}</small>`;
     li.title = p.defn;
-    li.innerHTML = `${p.name} <small>${p.defn}</small>`;
-    li.onclick = () => insertIntoQuery(p.name);
-    ul.appendChild(li);
+    li.onclick = () => navigate({ kind: 'pred', name: p.name });
+    pu.appendChild(li);
   }
 }
 
-function renderTypes(types) {
-  const ul = $('type-list');
-  if (!types.length) { ul.innerHTML = '<li><small>(none)</small></li>'; return; }
-  ul.innerHTML = '';
-  for (const t of types) {
-    const li = document.createElement('li');
-    li.title = t.fields.join(', ');
-    li.innerHTML = `${t.name} <small>(${t.fields.length} fields)</small>`;
-    li.onclick = () => useTypeQuery(t);
-    ul.appendChild(li);
+// ────────────────────────────────────────────────────────────────────
+// Navigation: a stack-based history of `location` records. Each location
+// kind has its own query builder and its own row-extractor.
+//
+//   { kind: 'all' }                      — root, nodes that have any
+//                                          indexed predicate
+//   { kind: 'type', name }               — nodes of a named type
+//   { kind: 'pred', name }               — nodes that have <name>
+//   { kind: 'node', uid }                — single node detail
+//   { kind: 'edge', from, pred, reverse} — neighbors of <from> via <pred>
+// ────────────────────────────────────────────────────────────────────
+const state = {
+  location: null,
+  history: [],
+  forward: [],
+  offset: 0,
+  rows: [],
+  selectedUid: null,
+  view: 'table',
+  sortKey: null,
+  sortDir: 1,
+};
+
+function navigate(loc, push = true) {
+  if (push && state.location) state.history.push({ ...state.location, _offset: state.offset });
+  if (push) state.forward = [];
+  state.location = loc;
+  state.offset = 0;
+  state.selectedUid = null;
+  state.sortKey = null;
+  refreshNav();
+  renderBreadcrumb();
+  loadCurrent();
+}
+function navBack() {
+  if (!state.history.length) return;
+  state.forward.push({ ...state.location, _offset: state.offset });
+  const prev = state.history.pop();
+  state.location = prev;
+  state.offset = prev._offset || 0;
+  state.selectedUid = null;
+  refreshNav(); renderBreadcrumb(); loadCurrent();
+}
+function navFwd() {
+  if (!state.forward.length) return;
+  state.history.push({ ...state.location, _offset: state.offset });
+  const next = state.forward.pop();
+  state.location = next;
+  state.offset = next._offset || 0;
+  state.selectedUid = null;
+  refreshNav(); renderBreadcrumb(); loadCurrent();
+}
+function refreshNav() {
+  $('nav-back').disabled = !state.history.length;
+  $('nav-fwd').disabled = !state.forward.length;
+}
+
+function locLabel(loc) {
+  switch (loc.kind) {
+    case 'all':  return 'All nodes';
+    case 'type': return `type: ${loc.name}`;
+    case 'pred': return `has: ${loc.name}`;
+    case 'node': return `node ${loc.uid}`;
+    case 'edge': return `${loc.reverse ? '~' : ''}${loc.pred}`;
+  }
+  return '?';
+}
+
+function renderBreadcrumb() {
+  const bc = $('breadcrumb');
+  bc.innerHTML = '';
+  // Render history (clickable to jump back) + current (bold).
+  const trail = state.history.slice(-4); // cap visible depth
+  trail.forEach((h, i) => {
+    const span = document.createElement('span');
+    span.className = 'crumb';
+    span.textContent = locLabel(h);
+    span.onclick = () => {
+      // Pop forward to that point.
+      const back = state.history.length - i;
+      for (let k = 0; k < back; k++) navBack();
+    };
+    bc.appendChild(span);
+    const sep = document.createElement('span');
+    sep.className = 'sep'; sep.textContent = '/';
+    bc.appendChild(sep);
+  });
+  if (state.location) {
+    const cur = document.createElement('span');
+    cur.className = 'crumb current';
+    cur.textContent = locLabel(state.location);
+    bc.appendChild(cur);
   }
 }
 
-function populateFilterPredicates(preds) {
-  const sel = $('filter-pred');
-  sel.innerHTML = '<option value="">(pick one)</option>';
-  for (const p of preds) {
-    const opt = document.createElement('option');
-    opt.value = p.name; opt.textContent = p.name;
-    sel.appendChild(opt);
+// ────────────────────────────────────────────────────────────────────
+// Query construction + result extraction per location kind.
+//
+// Note on expand(_all_): in Dgraph this only expands fields declared in
+// a `type` block. For schemas without explicit types (e.g. gfy-imported
+// code graphs), we build the projection from the predicate list cached
+// client-side — every scalar and list-of-string predicate is selected,
+// every uid predicate is selected as an inline {uid} so the detail pane
+// can show edge counts.
+// ────────────────────────────────────────────────────────────────────
+function projectFields() {
+  // Dedupe by name + skip a predicate literally named 'uid' so we never
+  // generate two `uid` siblings (which Dgraph rejects as "uid not allowed
+  // multiple times in same sub-query.").
+  const seen = new Set(['uid']);
+  const scalars = [];
+  const uidEdges = [];
+  for (const p of schema.preds) {
+    if (seen.has(p.name)) continue;
+    seen.add(p.name);
+    if (p.isUid) uidEdges.push(`${p.name} { uid }`);
+    else scalars.push(p.name);
   }
+  return [...scalars, ...uidEdges].join(' ');
 }
 
-// insertIntoQuery dumps the predicate name at the cursor of the query
-// textarea — handy for clicking on the sidebar to build queries.
-function insertIntoQuery(name) {
-  const t = $('query-text');
-  const start = t.selectionStart, end = t.selectionEnd;
-  t.value = t.value.substring(0, start) + name + t.value.substring(end);
-  t.focus();
-  t.selectionStart = t.selectionEnd = start + name.length;
+function reverseFields() {
+  const seen = new Set();
+  const out = [];
+  for (const p of schema.reverse) {
+    if (p === 'uid' || seen.has(p)) continue;
+    seen.add(p);
+    out.push(`~${p} { uid }`);
+  }
+  return out.join(' ');
 }
 
-function useTypeQuery(t) {
-  $('query-text').value =
-    `{ q(func: type(${t.name}), first: 50) {\n` +
-    `  uid\n  ` + t.fields.map(f => f.split(/\s+/)[0]).join('\n  ') +
-    `\n} }`;
+function buildQuery(loc, offset) {
+  const size = PAGE_SIZE;
+  const fields = projectFields();
+  const revs = reverseFields();
+  switch (loc.kind) {
+    case 'all': {
+      const anchor = schema.preds.find(p => p.indexed);
+      if (!anchor) return null;
+      return `{ q(func: has(${anchor.name}), first: ${size}, offset: ${offset}) { uid ${fields} } }`;
+    }
+    case 'type':
+      return `{ q(func: type(${loc.name}), first: ${size}, offset: ${offset}) { uid ${fields} } }`;
+    case 'pred':
+      return `{ q(func: has(${loc.name}), first: ${size}, offset: ${offset}) { uid ${fields} } }`;
+    case 'node':
+      // Single-node view also pulls all reverse edges so the detail pane
+      // shows incoming counts.
+      return `{ q(func: uid(${loc.uid})) { uid ${fields} ${revs} } }`;
+    case 'edge': {
+      const expr = loc.reverse ? `~${loc.pred}` : loc.pred;
+      return `{ q(func: uid(${loc.from})) { ${expr} (first: ${size}, offset: ${offset}) { uid ${fields} } } }`;
+    }
+  }
+  return null;
 }
 
-async function runQuery() {
-  const q = $('query-text').value;
-  $('query-status').className = 'status';
-  $('query-status').textContent = 'running…';
+function extractRows(loc, data) {
+  const q = data.q || [];
+  if (loc.kind === 'edge') {
+    const expr = loc.reverse ? `~${loc.pred}` : loc.pred;
+    return (q[0] && q[0][expr]) || [];
+  }
+  return q;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Run the query for the current location and re-render.
+// ────────────────────────────────────────────────────────────────────
+async function loadCurrent() {
+  const loc = state.location;
+  if (!loc) return;
+  const q = buildQuery(loc, state.offset);
+  if (!q) {
+    setStatus('no indexed predicates yet — ingest some data first', true);
+    renderRows([]);
+    return;
+  }
+  setStatus('loading…');
   const t0 = performance.now();
   try {
     const resp = await fetch('/query', { method: 'POST', body: q });
     const text = await resp.text();
+    if (!resp.ok) {
+      // Echo the offending DQL into the JSON pane so the user (and any
+      // bug report) can see what the UI sent.
+      $('result').textContent = '— FAILED QUERY —\n' + q + '\n\n— SERVER RESPONSE —\n' + text;
+      throw new Error(`${resp.status}: ${text}`);
+    }
+    const data = JSON.parse(text);
+    $('result').textContent = JSON.stringify(data, null, 2);
+    const rows = extractRows(loc, data);
+    state.rows = rows;
+    state.fullData = data;
+    renderRows(rows);
+    if (state.view === 'graph') renderGraph();
+    // For node-detail view, auto-select the single row.
+    if (loc.kind === 'node' && rows[0]) selectRow(rows[0]);
     const dt = (performance.now() - t0).toFixed(0);
-    if (!resp.ok) throw new Error(`${resp.status}: ${text}`);
-    let pretty;
-    try { pretty = JSON.stringify(JSON.parse(text), null, 2); }
-    catch { pretty = text; }
-    $('result').textContent = pretty;
-    let count = 0;
-    try {
-      const obj = JSON.parse(text);
-      if (obj && Array.isArray(obj.q)) count = obj.q.length;
-    } catch {}
-    $('query-status').textContent = `done in ${dt}ms · ${count} rows`;
+    setStatus(`${rows.length} row${rows.length === 1 ? '' : 's'} · ${dt}ms`);
+    // Pagination: enable Next iff we got a full page (best-effort heuristic).
+    $('page-prev').disabled = state.offset === 0;
+    $('page-next').disabled = rows.length < PAGE_SIZE;
+    const lo = state.offset + 1;
+    const hi = state.offset + rows.length;
+    $('page-label').textContent = rows.length ? `${lo}–${hi}` : '0';
   } catch (e) {
-    $('query-status').className = 'status error';
-    $('query-status').textContent = e.message;
+    setStatus(e.message, true);
+    renderRows([]);
   }
 }
 
-function buildFilterQuery() {
-  const pred = $('filter-pred').value;
-  const op = $('filter-op').value;
-  const val = $('filter-val').value;
-  const limit = $('filter-limit').value || 50;
-  if (!pred) { $('query-status').textContent = 'pick a predicate first'; return; }
-  let func;
-  if (op === 'has') {
-    func = `has(${pred})`;
-  } else {
-    if (!val) { $('query-status').textContent = 'op needs a value'; return; }
-    const isNum = /^-?\d+(\.\d+)?$/.test(val);
-    const formatted = isNum ? val : JSON.stringify(val);
-    func = `${op}(${pred}, ${formatted})`;
+// ────────────────────────────────────────────────────────────────────
+// Table view: build columns from the rows' scalar fields, render, and
+// hook click/double-click. uid-array fields become "→ N" badges.
+// ────────────────────────────────────────────────────────────────────
+function renderRows(rows) {
+  const head = document.querySelector('#data-table thead');
+  const body = document.querySelector('#data-table tbody');
+  head.innerHTML = '';
+  body.innerHTML = '';
+  if (!rows.length) {
+    head.innerHTML = '<tr><th>(no rows)</th></tr>';
+    return;
   }
-  $('query-text').value = `{ q(func: ${func}, first: ${limit}) {\n  uid\n  ${pred}\n} }`;
-  runQuery();
+  // Column discovery: union of scalar keys across rows. Show uid first.
+  const cols = ['uid'];
+  const seen = new Set(['uid']);
+  // Prefer common labels at the front for readability.
+  const priority = ['label', 'name', 'gid', 'title', 'source_file', 'file_type'];
+  for (const k of priority) {
+    for (const r of rows) {
+      if (k in r && !seen.has(k)) { cols.push(k); seen.add(k); break; }
+    }
+  }
+  for (const r of rows) {
+    for (const k of Object.keys(r)) {
+      if (seen.has(k)) continue;
+      // skip nested arrays/objects in main columns (shown as count badges
+      // instead, see below).
+      if (Array.isArray(r[k]) || typeof r[k] === 'object') continue;
+      cols.push(k); seen.add(k);
+    }
+  }
+  // Edge-count columns: any field where any row has an array of objects.
+  const edgeCols = [];
+  for (const r of rows) {
+    for (const [k, v] of Object.entries(r)) {
+      if (Array.isArray(v) && v.length && typeof v[0] === 'object') {
+        if (!edgeCols.includes(k)) edgeCols.push(k);
+      }
+    }
+  }
+  const allCols = [...cols, ...edgeCols];
+
+  // Apply sort.
+  let display = rows;
+  if (state.sortKey) {
+    const key = state.sortKey, dir = state.sortDir;
+    display = [...rows].sort((a, b) => {
+      const av = a[key], bv = b[key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
+  }
+
+  const trh = document.createElement('tr');
+  for (const c of allCols) {
+    const th = document.createElement('th');
+    th.textContent = c;
+    if (state.sortKey === c) th.classList.add(state.sortDir === 1 ? 'sort-asc' : 'sort-desc');
+    if (!edgeCols.includes(c)) {
+      th.onclick = () => {
+        if (state.sortKey === c) state.sortDir = -state.sortDir;
+        else { state.sortKey = c; state.sortDir = 1; }
+        renderRows(state.rows);
+      };
+    }
+    trh.appendChild(th);
+  }
+  head.appendChild(trh);
+
+  for (const r of display) {
+    const tr = document.createElement('tr');
+    if (r.uid === state.selectedUid) tr.classList.add('selected');
+    for (const c of cols) {
+      const td = document.createElement('td');
+      const v = r[c];
+      if (c === 'uid') td.classList.add('uid');
+      td.textContent = v == null ? '' : (Array.isArray(v) ? v.join(', ') : String(v));
+      td.title = td.textContent;
+      tr.appendChild(td);
+    }
+    for (const c of edgeCols) {
+      const td = document.createElement('td');
+      const v = r[c];
+      if (Array.isArray(v) && v.length) {
+        const span = document.createElement('span');
+        span.className = 'badge';
+        span.textContent = '→ ' + v.length;
+        td.appendChild(span);
+      }
+      tr.appendChild(td);
+    }
+    tr.onclick = () => selectRow(r);
+    tr.ondblclick = () => navigate({ kind: 'node', uid: r.uid });
+    body.appendChild(tr);
+  }
 }
+
+// ────────────────────────────────────────────────────────────────────
+// Detail pane: scalar attributes + outgoing/incoming edge counts. Each
+// edge group is a click that navigates to the edge-traversal location.
+// ────────────────────────────────────────────────────────────────────
+function selectRow(row) {
+  state.selectedUid = row.uid;
+  // Update row highlight cheaply.
+  for (const tr of document.querySelectorAll('#data-table tbody tr')) tr.classList.remove('selected');
+  // Re-find tr by index via uid match.
+  const trs = Array.from(document.querySelectorAll('#data-table tbody tr'));
+  trs.forEach((tr, i) => {
+    if (state.rows[i] && state.rows[i].uid === row.uid) tr.classList.add('selected');
+  });
+  renderDetail(row);
+}
+
+function renderDetail(row) {
+  const d = $('detail-pane');
+  const title = row.label || row.name || row.gid || row.title || row.uid;
+  const scalars = [];
+  const outgoing = [];   // [{ pred, count }]
+  const incoming = [];   // [{ pred, count, reverse: true }]
+  for (const [k, v] of Object.entries(row)) {
+    if (k === 'uid') continue;
+    if (Array.isArray(v) && v.length && typeof v[0] === 'object') {
+      if (k.startsWith('~')) incoming.push({ pred: k.slice(1), count: v.length, reverse: true });
+      else outgoing.push({ pred: k, count: v.length });
+      continue;
+    }
+    if (Array.isArray(v)) {
+      scalars.push([k, v.join(', ')]);
+      continue;
+    }
+    if (v != null && typeof v !== 'object') scalars.push([k, v]);
+  }
+  let html = `<div class="title">${escapeHtml(String(title))}</div>` +
+             `<div class="uid">uid ${row.uid}</div>`;
+  if (scalars.length) {
+    html += '<h3>Attributes</h3>';
+    for (const [k, v] of scalars) {
+      html += `<div class="field"><b>${escapeHtml(k)}</b>: <span class="v">${escapeHtml(String(v))}</span></div>`;
+    }
+  }
+  d.innerHTML = html;
+  // Append clickable edge groups so handlers attach.
+  if (outgoing.length) {
+    const h = document.createElement('h3'); h.textContent = 'Outgoing'; d.appendChild(h);
+    for (const e of outgoing) d.appendChild(edgeRow(row.uid, e.pred, e.count, false));
+  }
+  if (incoming.length) {
+    const h = document.createElement('h3'); h.textContent = 'Incoming (~reverse)'; d.appendChild(h);
+    for (const e of incoming) d.appendChild(edgeRow(row.uid, e.pred, e.count, true));
+  }
+  if (!outgoing.length && !incoming.length && !scalars.length) {
+    d.innerHTML += '<span class="empty">(node has no attributes or edges)</span>';
+  }
+}
+
+function edgeRow(fromUid, pred, count, reverse) {
+  const div = document.createElement('div');
+  div.className = 'edge-row';
+  const sigil = reverse ? '~' : '→';
+  div.innerHTML = `<span class="pred">${sigil} ${escapeHtml(pred)}</span><span class="badge">${count}</span>`;
+  div.onclick = () => navigate({ kind: 'edge', from: fromUid, pred, reverse });
+  return div;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// View tabs (Table / Graph / JSON) and graph rendering. Graph re-uses
+// the row-walk from before — anything with a uid becomes a node.
+// ────────────────────────────────────────────────────────────────────
+let graphNetwork = null;
+function renderGraph() {
+  const canvas = $('graph-canvas');
+  canvas.innerHTML = '';
+  const data = state.fullData;
+  if (!data) {
+    canvas.innerHTML = '<div style="padding:20px;color:#888">Run a query first.</div>';
+    return;
+  }
+  const nodes = new Map();
+  const edges = [];
+  const visit = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) { obj.forEach(visit); return; }
+    const uid = obj.uid;
+    if (!uid) { for (const v of Object.values(obj)) visit(v); return; }
+    if (!nodes.has(uid)) {
+      const label = obj.label || obj.name || obj.gid || obj.title || uid;
+      nodes.set(uid, { id: uid, label: String(label).slice(0, 40), title: String(label) });
+    }
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'uid' || !Array.isArray(v)) continue;
+      for (const child of v) {
+        if (child && typeof child === 'object' && child.uid) {
+          const reverse = k.startsWith('~');
+          const rel = reverse ? k.slice(1) : k;
+          edges.push(reverse
+            ? { from: child.uid, to: uid, label: rel }
+            : { from: uid, to: child.uid, label: rel });
+          visit(child);
+        }
+      }
+      visit(v);
+    }
+  };
+  for (const v of Object.values(data)) visit(v);
+  if (!nodes.size) {
+    canvas.innerHTML = '<div style="padding:20px;color:#888">No nodes with uid in result.</div>';
+    return;
+  }
+  for (const e of edges) {
+    if (!nodes.has(e.from)) nodes.set(e.from, { id: e.from, label: e.from, title: e.from });
+    if (!nodes.has(e.to))   nodes.set(e.to,   { id: e.to,   label: e.to,   title: e.to   });
+  }
+  graphNetwork = new vis.Network(canvas, {
+    nodes: Array.from(nodes.values()),
+    edges: edges.map((e, i) => ({ id: i, from: e.from, to: e.to, label: e.label, arrows: 'to', font: { size: 9, color: '#aaa', strokeWidth: 0 } })),
+  }, {
+    nodes: { shape: 'dot', size: 10, color: { background: '#4E79A7', border: '#2563eb' }, font: { color: '#e0e0e0', size: 12 } },
+    edges: { color: { color: '#4a5568', highlight: '#2563eb' }, smooth: { type: 'continuous' } },
+    physics: { stabilization: { iterations: 80 }, barnesHut: { gravitationalConstant: -2000 } },
+    interaction: { hover: true, tooltipDelay: 200 },
+  });
+  graphNetwork.on('selectNode', params => {
+    const id = params.nodes[0];
+    const row = state.rows.find(r => r.uid === id);
+    if (row) selectRow(row);
+  });
+  graphNetwork.on('doubleClick', params => {
+    if (params.nodes && params.nodes[0]) navigate({ kind: 'node', uid: params.nodes[0] });
+  });
+}
+
+function setView(v) {
+  state.view = v;
+  for (const t of document.querySelectorAll('.view-tab')) t.classList.toggle('active', t.dataset.view === v);
+  for (const p of document.querySelectorAll('.view-pane')) p.classList.toggle('active', p.id === 'view-' + v);
+  if (v === 'graph') renderGraph();
+}
+
+// renderAllGraph: walks the current location's query in pages until it
+// either runs out of rows or hits the user-configurable cap, accumulates
+// every result page into one synthetic dataset, and renders. This is the
+// "show me the whole graph" affordance — done entirely server-side via
+// DQL pagination, no gfy involvement.
+async function renderAllGraph() {
+  const loc = state.location;
+  if (!loc) return;
+  const cap = Math.max(50, Math.min(20000, parseInt($('graph-cap').value, 10) || 2000));
+  $('graph-status').textContent = 'fetching…';
+  $('graph-render-all').disabled = true;
+  // For 'node' / 'edge' locations, a single query is all we need; for
+  // collection locations, we paginate.
+  const collection = loc.kind === 'all' || loc.kind === 'type' || loc.kind === 'pred' || loc.kind === 'edge';
+  let merged = { q: [] };
+  let offset = 0;
+  const t0 = performance.now();
+  try {
+    while (true) {
+      const q = buildQuery(loc, offset);
+      if (!q) break;
+      const resp = await fetch('/query', { method: 'POST', body: q });
+      const text = await resp.text();
+      if (!resp.ok) throw new Error(`${resp.status}: ${text}`);
+      const data = JSON.parse(text);
+      const rows = extractRows(loc, data);
+      // Merge into the synthetic shape: a flat q[] holding every uid we've
+      // seen. The renderGraph walker handles arbitrarily nested arrays.
+      if (loc.kind === 'edge') {
+        // The edge query returns q[0][pred] = [...rows]; rebuild as flat q.
+        merged.q.push(...rows);
+      } else {
+        merged.q.push(...rows);
+      }
+      offset += rows.length;
+      if (!collection) break;
+      if (rows.length < PAGE_SIZE) break;     // exhausted
+      if (merged.q.length >= cap) {
+        merged.q = merged.q.slice(0, cap);
+        break;
+      }
+      $('graph-status').textContent = `fetching… ${merged.q.length}`;
+    }
+    state.fullData = merged;
+    state.rows = merged.q;
+    renderGraph();
+    const dt = (performance.now() - t0).toFixed(0);
+    $('graph-status').textContent = `${merged.q.length} top-level nodes · ${dt}ms`;
+  } catch (e) {
+    $('graph-status').textContent = 'error: ' + e.message;
+  } finally {
+    $('graph-render-all').disabled = false;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Status / utilities.
+// ────────────────────────────────────────────────────────────────────
+function setStatus(msg, isErr) {
+  const s = $('status');
+  s.textContent = msg;
+  s.className = 'status' + (isErr ? ' error' : '');
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Wire-up.
+// ────────────────────────────────────────────────────────────────────
+$('nav-back').onclick = navBack;
+$('nav-fwd').onclick = navFwd;
+$('nav-home').onclick = () => navigate({ kind: 'all' });
+$('nav-all').onclick = () => navigate({ kind: 'all' });
+$('page-prev').onclick = () => { state.offset = Math.max(0, state.offset - PAGE_SIZE); loadCurrent(); };
+$('page-next').onclick = () => { state.offset += PAGE_SIZE; loadCurrent(); };
+for (const t of document.querySelectorAll('.view-tab')) t.onclick = () => setView(t.dataset.view);
+$('graph-render-page').onclick = () => { setView('graph'); renderGraph(); };
+$('graph-render-all').onclick = () => { setView('graph'); renderAllGraph(); };
+
+// Advanced (DQL) escape hatch — runs the textarea against /query and
+// dumps the result into the JSON view tab.
+$('query-run').onclick = async () => {
+  setStatus('running custom DQL…');
+  try {
+    const resp = await fetch('/query', { method: 'POST', body: $('query-text').value });
+    const text = await resp.text();
+    if (!resp.ok) throw new Error(`${resp.status}: ${text}`);
+    $('result').textContent = JSON.stringify(JSON.parse(text), null, 2);
+    setView('json');
+    setStatus('done');
+  } catch (e) { setStatus(e.message, true); }
+};
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if ((e.metaKey || e.altKey) && e.key === 'ArrowLeft')  { e.preventDefault(); navBack(); }
+  if ((e.metaKey || e.altKey) && e.key === 'ArrowRight') { e.preventDefault(); navFwd(); }
+});
 
 async function loadState() {
   try {
-    const s = await fetchJSON('/admin/state');
+    const resp = await fetch('/admin/state');
+    if (!resp.ok) { $('meta-version').textContent = 'Bonsai'; return; }
+    const s = await resp.json();
     $('meta-version').textContent = s.version || 'bonsai';
     const sel = $('namespace-select');
     sel.innerHTML = '';
@@ -272,23 +868,15 @@ async function loadState() {
       opt.textContent = ns === 0 ? `${ns} (root)` : String(ns);
       sel.appendChild(opt);
     }
-  } catch (e) {
-    $('meta-version').textContent = 'Bonsai (state unavailable)';
-  }
+  } catch { $('meta-version').textContent = 'Bonsai'; }
 }
 
-// Wire up button handlers and keyboard shortcuts.
-$('query-run').onclick = runQuery;
-$('query-clear').onclick = () => { $('query-text').value = ''; $('query-text').focus(); };
-$('filter-run').onclick = buildFilterQuery;
-$('copy-result').onclick = () => navigator.clipboard.writeText($('result').textContent || '');
-$('query-text').addEventListener('keydown', e => {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); runQuery(); }
-});
-
 // Boot.
-loadState();
-loadSchema();
+(async () => {
+  await loadState();
+  await loadSchema();
+  navigate({ kind: 'all' });
+})();
 </script>
 </body>
 </html>

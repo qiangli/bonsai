@@ -23,10 +23,16 @@ reference the old name in their messages.
 
 ```
 make build      # builds the single `bonsai` binary
-make test       # tests pkg/bonsai, pkg/graphql, pkg/audit, pkg/ui, cmd/bonsai/server
+make install    # `go install` into $GOBIN (or $GOPATH/bin) with the same ldflags
+make test       # pkg/bonsai{,/graphalgo}, pkg/graphql, pkg/audit, pkg/ui,
+                #   cmd/bonsai/server, cmd/bonsai/tools
 make vet        # vet bonsai-authored packages only (see note below)
 make all        # vet + build + test
 make clean      # rm bonsai
+
+# Third-party API smoke (testdata/third-party-example imports pkg/bonsai
+# as an external module — guards the v1 contract documented in pkg/bonsai/doc.go)
+make smoke-as-third-party
 
 # Run a single test
 go test -count=1 -run TestDQLEdgeTraversal ./pkg/bonsai/...
@@ -46,6 +52,13 @@ go test -count=1 -run TestServerHTTP       ./cmd/bonsai/server/...
 # Loaders
 ./bonsai bulk --dir ./data --rdfs goldendata.rdf
 ./bonsai live --addr 127.0.0.1:9080 --rdfs data.rdf
+
+# One-shot "open this codebase in Bonsai": invokes gfy as a Go library
+# (cmd/bonsai/tools/explore.go) to build the code-knowledge graph,
+# ingests it, and starts the Explorer. The UI's Result panel has a Graph
+# tab that renders any DQL result via vis-network.
+./bonsai explore .                                             # current dir
+./bonsai explore /path/to/repo --no-serve                      # ingest only
 ```
 
 `make vet` deliberately scopes to `pkg/bonsai/...`, `cmd/bonsai/...`, `worker/...`.
@@ -130,3 +143,5 @@ These are easy to break and hard to debug. Keep them in mind when touching the d
   when index directives change (see `TestAlterRebuildsIndex`).
 - Backup format is single-file Badger Stream output. Upstream's multi-file manifest
   format is **not** produced — restore expects the single-file form.
+- `REWRITE_STATUS.md` is the running ledger of what landed and what's still open from
+  the cluster-removal rewrite. Consult it when porting more code from `priorart/`.
