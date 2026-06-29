@@ -1,6 +1,6 @@
 module github.com/qiangli/bonsai
 
-go 1.26.1
+go 1.26.4
 
 require (
 	contrib.go.opencensus.io/exporter/prometheus v0.4.2
