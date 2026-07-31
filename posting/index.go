@@ -28,13 +28,13 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/badger/v4/options"
 	bpb "github.com/dgraph-io/badger/v4/pb"
+	"github.com/dgraph-io/ristretto/v2/z"
 	"github.com/qiangli/bonsai/protos/pb"
 	"github.com/qiangli/bonsai/schema"
 	"github.com/qiangli/bonsai/tok"
 	"github.com/qiangli/bonsai/tok/hnsw"
 	"github.com/qiangli/bonsai/types"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 var emptyCountParams countParams

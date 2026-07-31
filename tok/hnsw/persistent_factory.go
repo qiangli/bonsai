@@ -9,10 +9,10 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/pkg/errors"
 	c "github.com/qiangli/bonsai/tok/constraints"
 	"github.com/qiangli/bonsai/tok/index"
 	opt "github.com/qiangli/bonsai/tok/options"
-	"github.com/pkg/errors"
 )
 
 const (

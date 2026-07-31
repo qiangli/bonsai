@@ -585,8 +585,9 @@ func handleAdminState(db *bonsai.DB) http.HandlerFunc {
 }
 
 // handleAdminDraining toggles the drain flag.
-//   GET  /admin/draining        → {"draining": false}
-//   POST /admin/draining?on=1   → flips on
+//
+//	GET  /admin/draining        → {"draining": false}
+//	POST /admin/draining?on=1   → flips on
 func handleAdminDraining(db *bonsai.DB, draining *atomic.Bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -685,12 +686,14 @@ func handleAdminSchema(db *bonsai.DB) http.HandlerFunc {
 }
 
 // handleRestore reads back a backup. Format is detected from the path:
+//
 //   - if <path> is a directory containing manifest.json, the upstream-
 //     compatible multi-file format is applied (RestoreFromManifest).
+//
 //   - otherwise <path> is treated as a single-file Badger Stream backup
 //     (RestoreFrom).
 //
-//	POST /admin/restore?path=<path>
+//     POST /admin/restore?path=<path>
 func handleRestore(db *bonsai.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		src := r.URL.Query().Get("path")

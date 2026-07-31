@@ -194,9 +194,9 @@ type graphConversion struct {
 // out-of-band and use bonsai-bulk --rdfs.
 func prepareGraphJSON(r io.Reader, kind graphJSONKind, allocUid func(count uint64) (uint64, error)) (*graphConversion, error) {
 	var doc struct {
-		Nodes []map[string]any `json:"nodes"`
-		Links []map[string]any `json:"links"`
-		Edges []map[string]any `json:"edges"`
+		Nodes    []map[string]any `json:"nodes"`
+		Links    []map[string]any `json:"links"`
+		Edges    []map[string]any `json:"edges"`
 		Elements *struct {
 			Nodes []struct {
 				Data map[string]any `json:"data"`

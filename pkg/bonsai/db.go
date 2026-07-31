@@ -20,8 +20,8 @@
 package bonsai
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -672,7 +672,6 @@ func scanVarNamesFromMutation(m *apipb.Mutation) []string {
 	return out
 }
 
-
 // substituteUidVars replaces `uid(varname)` tokens in the mutation's
 // SetNquads/DelNquads with the resolved 0xN uid for that variable.
 func substituteUidVars(m *apipb.Mutation, vars map[string]uint64) *apipb.Mutation {
@@ -1197,7 +1196,9 @@ func jsonValue(v types.Val) string {
 // Without ACL, anyone with server access can call this; the semantics are
 // "tenant routing", not "tenant isolation with auth".
 func (d *DB) CreateNamespace(ctx context.Context, ns uint64) (err error) {
-	if err := d.guardWrite(); err != nil { return err }
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("CreateNamespace", ctx, map[string]any{"ns": ns}, &err)()
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -1220,7 +1221,9 @@ func (d *DB) CreateNamespace(ctx context.Context, ns uint64) (err error) {
 // DropNamespace tears down a tenant: drops every Badger key prefixed with
 // the namespace, plus the schema and type entries.
 func (d *DB) DropNamespace(ctx context.Context, ns uint64) (err error) {
-	if err := d.guardWrite(); err != nil { return err }
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("DropNamespace", ctx, map[string]any{"ns": ns}, &err)()
 	if ns == x.RootNamespace {
 		return fmt.Errorf("DropNamespace: cannot drop root namespace")
@@ -1329,7 +1332,9 @@ func (d *DB) writeNamespaceRegistry(nss []uint64) error {
 // DropAll wipes every key from Badger and re-applies the reserved schema.
 // Equivalent to upstream's `Operation{DropAll: true}`.
 func (d *DB) DropAll(ctx context.Context) (err error) {
-	if err := d.guardWrite(); err != nil { return err }
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("DropAll", ctx, nil, &err)()
 	if err := d.pstore.DropAll(); err != nil {
 		return fmt.Errorf("DropAll: %w", err)
@@ -1345,7 +1350,9 @@ func (d *DB) DropAll(ctx context.Context) (err error) {
 // DropData wipes data while preserving the schema. Drops all DataKey,
 // IndexKey, ReverseKey, CountKey prefixes; keeps SchemaKey + TypeKey.
 func (d *DB) DropData(ctx context.Context) (err error) {
-	if err := d.guardWrite(); err != nil { return err }
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("DropData", ctx, nil, &err)()
 	prefixes := [][]byte{
 		{x.ByteData},
@@ -1365,7 +1372,9 @@ func (d *DB) DropData(ctx context.Context) (err error) {
 // argument can be the bare name ("name") or already-namespaced
 // ("0-name"); we coerce to the namespaced form here.
 func (d *DB) DropPredicate(ctx context.Context, predicate string) (err error) {
-	if err := d.guardWrite(); err != nil { return err }
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("DropPredicate", ctx, map[string]any{"predicate": predicate}, &err)()
 	attr := predicate
 	if !looksNamespaced(attr) {
@@ -1393,7 +1402,9 @@ func (d *DB) DropPredicate(ctx context.Context, predicate string) (err error) {
 // data). The type definition is the schema-language `type T { ... }`
 // declaration.
 func (d *DB) DropType(ctx context.Context, typeName string) (err error) {
-	if err := d.guardWrite(); err != nil { return err }
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("DropType", ctx, map[string]any{"type": typeName}, &err)()
 	if err := schema.State().DeleteType(typeName, d.nextTs()); err != nil {
 		return fmt.Errorf("DropType: %w", err)
@@ -1636,7 +1647,9 @@ func (d *DB) Backup(ctx context.Context, dst string) (err error) {
 // high-water mark, refresh the posting cache (the old in-memory entries
 // point at keys that Prepare dropped), and reload the schema state.
 func (d *DB) RestoreFrom(ctx context.Context, src string) (err error) {
-	if err := d.guardWrite(); err != nil { return err }
+	if err := d.guardWrite(); err != nil {
+		return err
+	}
 	defer d.auditDeferred("RestoreFrom", ctx, map[string]any{"src": src}, &err)()
 	_ = ctx // ctx is consumed by auditDeferred; the body below doesn't need it
 	f, err := os.Open(src)

@@ -26,13 +26,13 @@ import (
 	"github.com/twpayne/go-geom/encoding/geojson"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/dgraph-io/ristretto/v2/z"
 	"github.com/qiangli/bonsai/algo"
 	"github.com/qiangli/bonsai/protos/pb"
 	"github.com/qiangli/bonsai/task"
 	"github.com/qiangli/bonsai/types"
 	"github.com/qiangli/bonsai/types/facets"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 // ToJson converts the list of subgraph into a JSON response by calling toFastJSON.

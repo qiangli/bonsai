@@ -18,9 +18,9 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/dgraph-io/ristretto/v2/z"
 	"github.com/qiangli/bonsai/protos/pb"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 const (

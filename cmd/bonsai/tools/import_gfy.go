@@ -41,7 +41,7 @@ var pathLike = map[string]bool{
 	"uri": true, "url": true,
 	"file_type": true, "kind": true, "type": true,
 	"language": true,
-	"gid":       true, // bonsai's normalised id from the auto-detect path
+	"gid":      true, // bonsai's normalised id from the auto-detect path
 }
 
 // listLike predicates we expect to be `[string]` and want term-indexed.

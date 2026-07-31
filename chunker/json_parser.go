@@ -20,11 +20,11 @@ import (
 	"github.com/twpayne/go-geom/encoding/geojson"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
+	"github.com/dgraph-io/simdjson-go"
 	"github.com/qiangli/bonsai/protos/pb"
 	"github.com/qiangli/bonsai/types"
 	"github.com/qiangli/bonsai/types/facets"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/simdjson-go"
 )
 
 var errEmptyUID = errors.New("UID must be present and non-zero while deleting edges")

@@ -21,6 +21,7 @@ import (
 
 	bpb "github.com/dgraph-io/badger/v4/pb"
 	"github.com/dgraph-io/badger/v4/y"
+	"github.com/dgraph-io/ristretto/v2/z"
 	"github.com/qiangli/bonsai/algo"
 	"github.com/qiangli/bonsai/codec"
 	"github.com/qiangli/bonsai/protos/pb"
@@ -29,7 +30,6 @@ import (
 	"github.com/qiangli/bonsai/types"
 	"github.com/qiangli/bonsai/types/facets"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 var (

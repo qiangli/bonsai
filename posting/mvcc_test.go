@@ -18,10 +18,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/dgraph-io/ristretto/v2/z"
 	"github.com/qiangli/bonsai/protos/pb"
 	"github.com/qiangli/bonsai/schema"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 func TestIncrRollupGetsCancelledQuickly(t *testing.T) {

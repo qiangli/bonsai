@@ -139,7 +139,7 @@ func TestImportGfy_SmallSynthetic(t *testing.T) {
 	final, _ := db.SchemaText(ctx)
 	for _, want := range []string{
 		"calls: [uid] @reverse .", // from auto-detect
-		"label: string",            // body checked below for @index
+		"label: string",           // body checked below for @index
 	} {
 		if !strings.Contains(final, want) {
 			t.Errorf("post-Alter schema missing %q:\n%s", want, final)
@@ -181,4 +181,3 @@ func newSeededDB(t *testing.T, schema string) *bonsai.DB {
 	}
 	return db
 }
-

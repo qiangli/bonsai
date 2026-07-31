@@ -14,9 +14,9 @@ import (
 
 	"github.com/dgryski/go-groupvarint"
 
+	"github.com/dgraph-io/ristretto/v2/z"
 	"github.com/qiangli/bonsai/protos/pb"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 type seekPos int

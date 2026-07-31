@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/qiangli/bonsai/tok/index"
 	"github.com/pkg/errors"
+	"github.com/qiangli/bonsai/tok/index"
 )
 
 // holds an map in memory that is a string (which will be []bytes as string)

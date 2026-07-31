@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/dgraph-io/ristretto/v2/z"
 	"github.com/qiangli/bonsai/protos/pb"
 	"github.com/qiangli/bonsai/x"
-	"github.com/dgraph-io/ristretto/v2/z"
 )
 
 func getUids(size int) []uint64 {

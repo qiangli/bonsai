@@ -136,7 +136,7 @@ func TestGraphQLUpdateAndDelete(t *testing.T) {
 	}
 	for _, name := range []string{"Alice", "Bob", "Carol"} {
 		r := graphql.Execute(ctx, db, &graphql.Request{
-			Query: `mutation ($n: String!) { addPerson(input: {name: $n, age: 30}) { uid } }`,
+			Query:     `mutation ($n: String!) { addPerson(input: {name: $n, age: 30}) { uid } }`,
 			Variables: map[string]any{"n": name},
 		})
 		if len(r.Errors) > 0 {

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang/glog"
+	"github.com/pkg/errors"
 	c "github.com/qiangli/bonsai/tok/constraints"
 	"github.com/qiangli/bonsai/tok/index"
 	opt "github.com/qiangli/bonsai/tok/options"
-	"github.com/golang/glog"
-	"github.com/pkg/errors"
 )
 
 type persistentHNSW[T c.Float] struct {

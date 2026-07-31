@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 	bpb "github.com/dgraph-io/badger/v4/pb"
+	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 	"github.com/klauspost/compress/s2"
 	"google.golang.org/protobuf/proto"
 

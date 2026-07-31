@@ -20,7 +20,7 @@ ifeq ($(INSTALL_DIR),)
 INSTALL_DIR := $(shell go env GOPATH)/bin
 endif
 
-.PHONY: build install test all clean vet
+.PHONY: build install test all clean vet fmtcheck hooks
 
 build:
 	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bonsai ./cmd/bonsai
@@ -62,3 +62,10 @@ smoke-as-third-party:
 
 clean:
 	rm -f bonsai
+
+fmtcheck:  ## gofmt gate — reports unformatted files, never rewrites them
+	@./scripts/fmtcheck.sh
+
+hooks:  ## install the pre-push formatting gate
+	@git config core.hooksPath scripts/hooks
+	@echo "hooks installed: core.hooksPath=scripts/hooks"

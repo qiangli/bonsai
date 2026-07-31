@@ -12,25 +12,39 @@
 // surface and won't change without a major-version bump:
 //
 //   - Open(opts Options) (*DB, error)
+//
 //   - OpenFrozen(path string) (*DB, error)
+//
 //   - Freeze(srcDir, dstFile string) error
+//
 //   - (*DB).Close() error
+//
 //   - (*DB).ReadOnly() bool
+//
 //   - (*DB).MutationTick() uint64
+//
 //   - (*DB).NextReadableTs() uint64
 //
 //   - (*DB).Alter, Mutate, Upsert, Set, Get
+//
 //   - (*DB).Query, QueryWithVars, QueryAsOf, QueryWithVarsAsOf
+//
 //   - (*DB).Backup, BackupTo, RestoreFrom, RestoreFromManifest,
 //     RestoreFromManifestWithOptions
+//
 //   - (*DB).Export, ExportTo
+//
 //   - (*DB).Drop{All,Data,Predicate,Type}, SchemaText
+//
 //   - (*DB).AssignUid, MaxUid
+//
 //   - (*DB).CreateNamespace, DropNamespace, ListNamespaces
 //
 //   - Options, BackupOptions, RestoreOptions, BackupType, BackupFull,
 //     BackupIncremental, ImportSummary, Manifest, MasterManifest
+//
 //   - ErrReadOnly, ErrNoValue
+//
 //   - ImportStream
 //
 // And the graphalgo helpers — see pkg/bonsai/graphalgo/graphalgo.go.

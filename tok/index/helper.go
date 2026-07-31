@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"unsafe"
 
-	c "github.com/qiangli/bonsai/tok/constraints"
 	"github.com/golang/glog"
+	c "github.com/qiangli/bonsai/tok/constraints"
 )
 
 // BytesAsFloatArray[T c.Float](encoded) converts encoded into a []T,

@@ -17,9 +17,9 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/pkg/errors"
 	c "github.com/qiangli/bonsai/tok/constraints"
 	"github.com/qiangli/bonsai/tok/index"
-	"github.com/pkg/errors"
 	"github.com/viterin/vek"
 	"github.com/viterin/vek/vek32"
 )
