@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**`bashy sprint` is the source of requests, plans and details for every agent** — every todo is tracked and accounted for as a STORY in a sprint: read the sprint card (spec-ref, acceptance, continuity) for what to do, and never pick up a todo without a story in a `bashy sprint` (file one first). Delivery commits carry `Sprint:` / `Story:` / `Story-ID:` trailers.
+
 ## What this project is
 
 **Bonsai** is a single-node, embeddable graph database — a carefully pruned fork of
