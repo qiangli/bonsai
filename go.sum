@@ -334,8 +334,8 @@ github.com/prometheus/procfs v0.20.1/go.mod h1:o9EMBZGRyvDrSPH1RqdxhojkuXstoe4Ul
 github.com/prometheus/statsd_exporter v0.22.7/go.mod h1:N/TevpjkIh9ccs6nuzY3jQn9dFqnUakOjnEuMPJJJnI=
 github.com/prometheus/statsd_exporter v0.29.0 h1:2iaiBLpAg/WcdW4nF0UTQfjCE2DXD+1NVnCM1ulPKd8=
 github.com/prometheus/statsd_exporter v0.29.0/go.mod h1:3t+fT5ESGc0KBUfadCp43KOnVPFmbAF4c58Osotz3Zk=
-github.com/qiangli/gfy v0.0.0-20260920194528-5f76a171a47d h1:HmxdyUt1Z8D0ERQs9Fp0lxjKBdK4C1B+UjP2KavPjc8=
-github.com/qiangli/gfy v0.0.0-20260920194528-5f76a171a47d/go.mod h1:wollNwuzk/IcVOeoKJJoWiPMJ9nI3oEI+yMTttX4VUQ=
+github.com/qiangli/gfy v0.0.0-20261009070616-1a9d12418c8d h1:dH+sJZTC+ZjeyFSSWOrFukUNUoMhR7UbkEDTwWjcXJ4=
+github.com/qiangli/gfy v0.0.0-20261009070616-1a9d12418c8d/go.mod h1:7wEuPLejACxwbhFqG0F07nvrzOLGgKlFlx4TGMTRWbg=
 github.com/richardlehane/mscfb v1.0.6 h1:eN3bvvZCp00bs7Zf52bxNwAx5lJDBK1tCuH19qq5aC8=
 github.com/richardlehane/mscfb v1.0.6/go.mod h1:pe0+IUIc0AHh0+teNzBlJCtSyZdFOGgV4ZK9bsoV+Jo=
 github.com/richardlehane/msoleps v1.0.6 h1:9BvkpjvD+iUBalUY4esMwv6uBkfOip/Lzvd93jvR9gg=
