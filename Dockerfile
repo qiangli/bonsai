@@ -3,7 +3,7 @@
 ## Build:    docker build -t bonsai .
 ## Run:      docker run -p 8080:8080 -p 9080:9080 -v $(pwd)/data:/data bonsai
 
-FROM golang:1.26 AS build
+FROM golang:1.27.1 AS build
 ARG VERSION=docker
 WORKDIR /src
 COPY go.mod go.sum ./
