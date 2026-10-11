@@ -56,7 +56,7 @@ func ParseRDFs(b []byte) ([]*api.NQuad, *pb.Metadata, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		nqs = append(nqs, &nq)
+		nqs = append(nqs, nq)
 	}
 
 	return nqs, calculateTypeHints(nqs), nil
@@ -68,12 +68,8 @@ func isSpaceRune(r rune) bool {
 
 // ParseRDF parses a mutation string and returns the N-Quad representation for it.
 // It parses N-Quad statements based on http://www.w3.org/TR/n-quads/.
-// Safe to return by value: embedded mutex is never used before return.
-// The static analyzer warning is a false positive (copylocks).
-//
-//nolint:govet,copylocks
-func ParseRDF(line string, l *lex.Lexer) (api.NQuad, error) {
-	var rnq api.NQuad
+func ParseRDF(line string, l *lex.Lexer) (*api.NQuad, error) {
+	rnq := &api.NQuad{}
 	line = strings.TrimSpace(line)
 	if len(line) == 0 {
 		return rnq, ErrEmpty
@@ -197,7 +193,7 @@ L:
 
 		case itemLeftRound:
 			it.Prev() // backup '('
-			if err := parseFacetsRDF(it, &rnq); err != nil {
+			if err := parseFacetsRDF(it, rnq); err != nil {
 				return rnq, fmt.Errorf("could not parse facet: %w", err)
 			}
 		}

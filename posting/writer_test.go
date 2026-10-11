@@ -21,8 +21,8 @@ import (
 var val = make([]byte, 128)
 
 func BenchmarkWriter(b *testing.B) {
-	createKVList := func() bpb.KVList {
-		var KVList bpb.KVList
+	createKVList := func() *bpb.KVList {
+		KVList := &bpb.KVList{}
 		for i := range 5000000 {
 			n := &bpb.KV{Key: []byte(fmt.Sprint(i)), Value: val, Version: 5}
 			KVList.Kv = append(KVList.Kv, n)
@@ -112,7 +112,7 @@ func BenchmarkWriter(b *testing.B) {
 
 		for i := 0; i < b.N; i++ {
 			wb := db.NewManagedWriteBatch()
-			if err := wb.WriteList(&KVList); err != nil {
+			if err := wb.WriteList(KVList); err != nil {
 				panic(err)
 			}
 			require.NoError(b, wb.Flush())

@@ -143,7 +143,7 @@ func (rc *rdfChunker) Parse(chunkBuf *bytes.Buffer) error {
 		case err != nil:
 			return fmt.Errorf("while parsing line %q: %w", str, err)
 		default:
-			rc.nqs.Push(&nq)
+			rc.nqs.Push(nq)
 		}
 	}
 	return nil

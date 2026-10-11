@@ -1131,7 +1131,7 @@ const (
 // Query schema is defined as current schema minus tokens to delete from current schema.
 func (rb *IndexRebuild) GetQuerySchema() *pb.SchemaUpdate {
 	// Copy the current schema.
-	querySchema := *rb.CurrentSchema
+	querySchema := proto.Clone(rb.CurrentSchema).(*pb.SchemaUpdate)
 	info := rb.needsTokIndexRebuild()
 
 	// Compute old.Tokenizer minus info.tokenizersToDelete.
@@ -1156,7 +1156,7 @@ func (rb *IndexRebuild) GetQuerySchema() *pb.SchemaUpdate {
 	if rb.needsReverseEdgesRebuild() == indexRebuild {
 		querySchema.Directive = pb.SchemaUpdate_NONE
 	}
-	return &querySchema
+	return querySchema
 }
 
 // DropIndexes drops the indexes that need to be rebuilt.

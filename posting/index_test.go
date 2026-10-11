@@ -280,7 +280,7 @@ func TestCountReverseIndexWithData(t *testing.T) {
 		Attr:          attr,
 		StartTs:       12,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -314,7 +314,7 @@ func TestCountReverseIndexEmptyPosting(t *testing.T) {
 		Attr:          attr,
 		StartTs:       12,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -339,7 +339,7 @@ func TestRebuildTokIndex(t *testing.T) {
 		Attr:          x.AttrInRootNamespace("name2"),
 		StartTs:       5,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -393,7 +393,7 @@ func TestRebuildTokIndexWithDeletion(t *testing.T) {
 		Attr:          x.AttrInRootNamespace("name2"),
 		StartTs:       5,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -407,8 +407,8 @@ func TestRebuildTokIndexWithDeletion(t *testing.T) {
 	rb = IndexRebuild{
 		Attr:          x.AttrInRootNamespace("name2"),
 		StartTs:       6,
-		OldSchema:     &currentSchema,
-		CurrentSchema: &newSchema,
+		OldSchema:     currentSchema,
+		CurrentSchema: newSchema,
 	}
 	rebuildInfo = rb.needsTokIndexRebuild()
 	prefixes, err = rebuildInfo.prefixesForTokIndexes()
@@ -457,7 +457,7 @@ func TestRebuildReverseEdges(t *testing.T) {
 		Attr:          friendAttr,
 		StartTs:       16,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	// TODO: Remove after fixing sync marks.
 	require.NoError(t, rebuildReverseEdges(context.Background(), &rb))

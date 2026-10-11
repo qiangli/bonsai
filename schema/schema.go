@@ -241,7 +241,7 @@ func (s *state) SetType(typeName string, typ *pb.TypeUpdate) {
 }
 
 // Get gets the schema for the given predicate.
-func (s *state) Get(ctx context.Context, pred string) (pb.SchemaUpdate, bool) {
+func (s *state) Get(ctx context.Context, pred string) (*pb.SchemaUpdate, bool) {
 	isWrite, _ := ctx.Value(IsWrite).(bool)
 	s.RLock()
 	defer s.RUnlock()
@@ -249,26 +249,26 @@ func (s *state) Get(ctx context.Context, pred string) (pb.SchemaUpdate, bool) {
 	// If mutSchema doesn't have the predicate key, we use the schema from s.predicate.
 	if isWrite {
 		if schema, ok := s.mutSchema[pred]; ok {
-			return *schema, true
+			return proto.Clone(schema).(*pb.SchemaUpdate), true
 		}
 	}
 
 	schema, ok := s.predicate[pred]
 	if !ok {
-		return pb.SchemaUpdate{}, false
+		return nil, false
 	}
-	return *schema, true
+	return proto.Clone(schema).(*pb.SchemaUpdate), true
 }
 
 // GetType gets the type definition for the given type name.
-func (s *state) GetType(typeName string) (pb.TypeUpdate, bool) {
+func (s *state) GetType(typeName string) (*pb.TypeUpdate, bool) {
 	s.RLock()
 	defer s.RUnlock()
 	typ, has := s.types[typeName]
 	if !has {
-		return pb.TypeUpdate{}, false
+		return nil, false
 	}
-	return *typ, true
+	return proto.Clone(typ).(*pb.TypeUpdate), true
 }
 
 // TypeOf returns the schema type of predicate
@@ -906,8 +906,8 @@ func isDgraphXidChangeValid(original, update *pb.SchemaUpdate) bool {
 
 func compareSchemaUpdates(original, update *pb.SchemaUpdate) []string {
 	var changes []string
-	vOriginal := reflect.ValueOf(*original)
-	vUpdate := reflect.ValueOf(*update)
+	vOriginal := reflect.ValueOf(original).Elem()
+	vUpdate := reflect.ValueOf(update).Elem()
 
 	// Iterate through the fields of the original schema
 	for i := range vOriginal.NumField() {

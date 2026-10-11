@@ -437,11 +437,10 @@ func (d *DB) Alter(ctx context.Context, schemaText string) (err error) {
 		// Snapshot the old schema BEFORE we overwrite it; needed to decide
 		// whether indexes have to be rebuilt. We `proto.Clone` rather than
 		// take an address of the value the schema state hands us, because
-		// pb.SchemaUpdate embeds a sync.Mutex via the proto runtime and
-		// `&value` would be a copylocks vet warning.
+		// Get returns an owned clone, so the rebuild can retain the old schema.
 		var oldPtr *pb.SchemaUpdate
 		if old, ok := schema.State().Get(ctx, su.Predicate); ok {
-			oldPtr = proto.Clone(&old).(*pb.SchemaUpdate)
+			oldPtr = old
 		}
 
 		if err := d.persistSchemaUpdate(su, ts); err != nil {
@@ -481,7 +480,7 @@ func (d *DB) Alter(ctx context.Context, schemaText string) (err error) {
 // callers must pre-namespace su.Predicate.
 func (d *DB) persistSchemaUpdate(su *pb.SchemaUpdate, ts uint64) error {
 	curr, ok := schema.State().Get(context.Background(), su.Predicate)
-	if ok && schemaEqual(&curr, su) {
+	if ok && schemaEqual(curr, su) {
 		return nil
 	}
 	schema.State().Set(su.Predicate, su)
@@ -1429,7 +1428,7 @@ func (d *DB) SchemaText(ctx context.Context) (string, error) {
 		if !ok {
 			continue
 		}
-		b.WriteString(formatSchemaUpdate(bare, &su))
+		b.WriteString(formatSchemaUpdate(bare, su))
 		b.WriteString("\n")
 	}
 	for _, t := range schema.State().Types() {
@@ -1696,7 +1695,7 @@ func (d *DB) persistSchema(su *pb.SchemaUpdate, ts uint64) error {
 	su = setNamespaceIfMissing(su, x.RootNamespace)
 
 	curr, ok := schema.State().Get(context.Background(), su.Predicate)
-	if ok && schemaEqual(&curr, su) {
+	if ok && schemaEqual(curr, su) {
 		return nil
 	}
 	schema.State().Set(su.Predicate, su)
