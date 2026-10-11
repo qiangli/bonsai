@@ -84,7 +84,7 @@ func runMutation(ctx context.Context, edge *pb.DirectedEdge, txn *posting.Txn) e
 		return errors.New("delete-predicate is not supported in bonsai yet")
 	}
 
-	if err := ValidateAndConvert(edge, &su); err != nil {
+	if err := ValidateAndConvert(edge, su); err != nil {
 		return err
 	}
 

@@ -214,9 +214,9 @@ func TestAddMutation(t *testing.T) {
 	require.EqualValues(t, "anti-testing", p.Facets[0].Key)
 }
 
-func getFirst(t *testing.T, l *List, readTs uint64) (res pb.Posting) {
+func getFirst(t *testing.T, l *List, readTs uint64) (res *pb.Posting) {
 	require.NoError(t, l.Iterate(readTs, 0, func(p *pb.Posting) error {
-		res = *p
+		res = proto.Clone(p).(*pb.Posting)
 		return ErrStopIteration
 	}))
 	return res

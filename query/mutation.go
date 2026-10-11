@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dgraph-io/dgo/v250/protos/api"
 	"github.com/qiangli/bonsai/dql"
@@ -107,9 +108,9 @@ func ExpandEdges(ctx context.Context, m *pb.Mutations) ([]*pb.DirectedEdge, erro
 			if x.ParseAttr(pred)[0] == '~' {
 				continue
 			}
-			edgeCopy := *edge
+			edgeCopy := proto.Clone(edge).(*pb.DirectedEdge)
 			edgeCopy.Attr = pred
-			edges = append(edges, &edgeCopy)
+			edges = append(edges, edgeCopy)
 		}
 	}
 

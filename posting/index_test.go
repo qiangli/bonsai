@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/qiangli/bonsai/protos/pb"
@@ -280,7 +282,7 @@ func TestCountReverseIndexWithData(t *testing.T) {
 		Attr:          attr,
 		StartTs:       12,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -314,7 +316,7 @@ func TestCountReverseIndexEmptyPosting(t *testing.T) {
 		Attr:          attr,
 		StartTs:       12,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -339,7 +341,7 @@ func TestRebuildTokIndex(t *testing.T) {
 		Attr:          x.AttrInRootNamespace("name2"),
 		StartTs:       5,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -393,7 +395,7 @@ func TestRebuildTokIndexWithDeletion(t *testing.T) {
 		Attr:          x.AttrInRootNamespace("name2"),
 		StartTs:       5,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	rebuildInfo := rb.needsTokIndexRebuild()
 	prefixes, err := rebuildInfo.prefixesForTokIndexes()
@@ -407,8 +409,8 @@ func TestRebuildTokIndexWithDeletion(t *testing.T) {
 	rb = IndexRebuild{
 		Attr:          x.AttrInRootNamespace("name2"),
 		StartTs:       6,
-		OldSchema:     &currentSchema,
-		CurrentSchema: &newSchema,
+		OldSchema:     currentSchema,
+		CurrentSchema: newSchema,
 	}
 	rebuildInfo = rb.needsTokIndexRebuild()
 	prefixes, err = rebuildInfo.prefixesForTokIndexes()
@@ -457,7 +459,7 @@ func TestRebuildReverseEdges(t *testing.T) {
 		Attr:          friendAttr,
 		StartTs:       16,
 		OldSchema:     nil,
-		CurrentSchema: &currentSchema,
+		CurrentSchema: currentSchema,
 	}
 	// TODO: Remove after fixing sync marks.
 	require.NoError(t, rebuildReverseEdges(context.Background(), &rb))
@@ -498,6 +500,30 @@ func TestRebuildReverseEdges(t *testing.T) {
 	require.EqualValues(t, 1, uids0[0])
 	require.EqualValues(t, 2, uids0[1])
 	require.EqualValues(t, 1, uids1[0])
+}
+
+func TestGetQuerySchemaOwnsClone(t *testing.T) {
+	old := &pb.SchemaUpdate{ValueType: pb.Posting_STRING, Directive: pb.SchemaUpdate_INDEX,
+		Tokenizer: []string{"exact"}}
+	current := &pb.SchemaUpdate{ValueType: pb.Posting_STRING, Directive: pb.SchemaUpdate_INDEX,
+		Tokenizer: []string{"exact"}, IndexSpecs: []*pb.VectorIndexSpec{{Name: "hnsw"}}}
+	unknown := protowire.AppendVarint(protowire.AppendTag(nil, 100, protowire.VarintType), 13)
+	current.ProtoReflect().SetUnknown(unknown)
+	rb := IndexRebuild{OldSchema: old, CurrentSchema: current}
+	first := rb.GetQuerySchema()
+	require.True(t, proto.Equal(current, first))
+	first.ValueType = pb.Posting_INT
+	first.Tokenizer[0] = "term"
+	first.IndexSpecs[0].Name = "changed"
+	first.ProtoReflect().SetUnknown(nil)
+
+	second := rb.GetQuerySchema()
+	require.True(t, proto.Equal(current, second))
+	require.Equal(t, unknown, []byte(second.ProtoReflect().GetUnknown()))
+	require.Equal(t, pb.Posting_STRING, rb.CurrentSchema.ValueType)
+	require.Equal(t, "exact", rb.CurrentSchema.Tokenizer[0])
+	require.Equal(t, "hnsw", rb.CurrentSchema.IndexSpecs[0].Name)
+	require.Equal(t, "exact", rb.OldSchema.Tokenizer[0])
 }
 
 func TestNeedsTokIndexRebuild(t *testing.T) {

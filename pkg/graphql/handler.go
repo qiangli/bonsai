@@ -153,7 +153,7 @@ func newApiMutation() *api.Mutation { return &api.Mutation{} }
 
 // dgraphSchemaType looks up a type definition in the process-global schema
 // state. Wrapped here so the translator can stay in its own package.
-func dgraphSchemaType(name string) (pb.TypeUpdate, bool) {
+func dgraphSchemaType(name string) (*pb.TypeUpdate, bool) {
 	return schema.State().GetType(name)
 }
 

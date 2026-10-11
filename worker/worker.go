@@ -132,7 +132,7 @@ func GetSchemaOverNetwork(_ context.Context, req *pb.SchemaRequest) ([]*pb.Schem
 		if !ok {
 			continue
 		}
-		out = append(out, schemaUpdateToNode(&su))
+		out = append(out, schemaUpdateToNode(su))
 	}
 	return out, nil
 }
@@ -148,7 +148,7 @@ func GetTypes(_ context.Context, req *pb.SchemaRequest) ([]*pb.TypeUpdate, error
 		if !ok {
 			continue
 		}
-		out = append(out, &t)
+		out = append(out, t)
 	}
 	return out, nil
 }
