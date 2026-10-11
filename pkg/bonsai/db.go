@@ -434,10 +434,8 @@ func (d *DB) Alter(ctx context.Context, schemaText string) (err error) {
 	for _, su := range parsed.Preds {
 		su = setNamespaceIfMissing(su, ns)
 
-		// Snapshot the old schema BEFORE we overwrite it; needed to decide
-		// whether indexes have to be rebuilt. We `proto.Clone` rather than
-		// take an address of the value the schema state hands us, because
-		// Get returns an owned clone, so the rebuild can retain the old schema.
+		// Get returns an owned snapshot of the old schema before the update,
+		// which the rebuild retains to decide whether indexes must change.
 		var oldPtr *pb.SchemaUpdate
 		if old, ok := schema.State().Get(ctx, su.Predicate); ok {
 			oldPtr = old

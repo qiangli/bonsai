@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/qiangli/bonsai/protos/pb"
@@ -498,6 +500,30 @@ func TestRebuildReverseEdges(t *testing.T) {
 	require.EqualValues(t, 1, uids0[0])
 	require.EqualValues(t, 2, uids0[1])
 	require.EqualValues(t, 1, uids1[0])
+}
+
+func TestGetQuerySchemaOwnsClone(t *testing.T) {
+	old := &pb.SchemaUpdate{ValueType: pb.Posting_STRING, Directive: pb.SchemaUpdate_INDEX,
+		Tokenizer: []string{"exact"}}
+	current := &pb.SchemaUpdate{ValueType: pb.Posting_STRING, Directive: pb.SchemaUpdate_INDEX,
+		Tokenizer: []string{"exact"}, IndexSpecs: []*pb.VectorIndexSpec{{Name: "hnsw"}}}
+	unknown := protowire.AppendVarint(protowire.AppendTag(nil, 100, protowire.VarintType), 13)
+	current.ProtoReflect().SetUnknown(unknown)
+	rb := IndexRebuild{OldSchema: old, CurrentSchema: current}
+	first := rb.GetQuerySchema()
+	require.True(t, proto.Equal(current, first))
+	first.ValueType = pb.Posting_INT
+	first.Tokenizer[0] = "term"
+	first.IndexSpecs[0].Name = "changed"
+	first.ProtoReflect().SetUnknown(nil)
+
+	second := rb.GetQuerySchema()
+	require.True(t, proto.Equal(current, second))
+	require.Equal(t, unknown, []byte(second.ProtoReflect().GetUnknown()))
+	require.Equal(t, pb.Posting_STRING, rb.CurrentSchema.ValueType)
+	require.Equal(t, "exact", rb.CurrentSchema.Tokenizer[0])
+	require.Equal(t, "hnsw", rb.CurrentSchema.IndexSpecs[0].Name)
+	require.Equal(t, "exact", rb.OldSchema.Tokenizer[0])
 }
 
 func TestNeedsTokIndexRebuild(t *testing.T) {

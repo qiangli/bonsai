@@ -240,7 +240,8 @@ func (s *state) SetType(typeName string, typ *pb.TypeUpdate) {
 	s.elog.Printf(logTypeUpdate(typ, typeName))
 }
 
-// Get gets the schema for the given predicate.
+// Get returns an owned copy of the schema for the given predicate. Callers may
+// change its scalar, repeated, and nested fields without changing state.
 func (s *state) Get(ctx context.Context, pred string) (*pb.SchemaUpdate, bool) {
 	isWrite, _ := ctx.Value(IsWrite).(bool)
 	s.RLock()
@@ -260,7 +261,7 @@ func (s *state) Get(ctx context.Context, pred string) (*pb.SchemaUpdate, bool) {
 	return proto.Clone(schema).(*pb.SchemaUpdate), true
 }
 
-// GetType gets the type definition for the given type name.
+// GetType returns an owned copy of the type definition for the given type name.
 func (s *state) GetType(typeName string) (*pb.TypeUpdate, bool) {
 	s.RLock()
 	defer s.RUnlock()
