@@ -2,7 +2,7 @@ module github.com/qiangli/bonsai
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	contrib.go.opencensus.io/exporter/prometheus v0.4.2
