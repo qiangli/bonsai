@@ -3,14 +3,19 @@ id: 803503f37232
 kind: bug
 title: 'S407.7 P0: bonsai/x package init costs 67-87 ms in every bashy process (metrics registration + health goroutine + zap logger at init); make it lazy'
 seq: 1
-status: todo
+status: done
 priority: p0
 labels:
     - performance
 created: 2026-10-25T04:05:57.021821Z
+weave: 2
+assignee: claude-sonnet5.5
 sprint: 407
 sprint_id: 90546935-fbc2-5d09-94b0-19c380846681
 sprint_title: bashy 1.0.0 release gates pending external dependencies (follow-up to Sprint 379)
+closed: 2026-10-25T04:36:43.329663Z
+resolution: fixed
+closed_by: claude-sonnet5.5-b
 ---
 
 Found 2026-10-25 (operator: fix the Darwin startup cost too). Measured with GODEBUG=inittrace=1 on macOS arm64:
