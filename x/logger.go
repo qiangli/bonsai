@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
@@ -104,11 +105,10 @@ func (l *Logger) Sync() {
 	_ = l.writer.Close()
 }
 
-var slowOperationLogger *zap.Logger
-
-func init() {
-	initSlowOperationLogger()
-}
+var (
+	slowOperationLogger     *zap.Logger
+	slowOperationLoggerOnce sync.Once
+)
 
 func initSlowOperationLogger() {
 	config := zap.NewProductionEncoderConfig()
@@ -178,5 +178,6 @@ func LogSlowOperation(ctx context.Context, operation, opType, payload string, la
 	}
 	fields = append(fields, zap.String("payload", payload))
 
+	slowOperationLoggerOnce.Do(initSlowOperationLogger)
 	slowOperationLogger.Warn("slow operation", fields...)
 }

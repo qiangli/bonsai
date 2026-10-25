@@ -136,7 +136,7 @@ const (
 
 var (
 	// Useful for running multiple servers on the same machine.
-	regExpHostName = regexp.MustCompile(ValidHostnameRegex)
+	regExpHostName = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(ValidHostnameRegex) })
 	// Nilbyte is a nil byte slice. Used
 	Nilbyte []byte
 	// SuperAdminUid is a map from namespace to the Uid of superadmin group node.
@@ -791,7 +791,7 @@ func ValidateAddress(addr string) error {
 	if len(strings.Replace(host, ".", "", -1)) > 255 {
 		return errors.Errorf("Hostname should be less than or equal to 255 characters")
 	}
-	if !regExpHostName.MatchString(host) {
+	if !regExpHostName().MatchString(host) {
 		return errors.Errorf("Invalid hostname: %v", host)
 	}
 	return nil
@@ -1404,14 +1404,15 @@ func MarshalToSizedBuffer(buf []byte, m proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(buf, m)
 }
 
-// RootTemplate defines the help template for dgraph command.
-var RootTemplate string = `Dgraph is a horizontally scalable and distributed graph database,
+// RootTemplate returns the help template for dgraph command. It is a func so BuildDetails does not run at init.
+func RootTemplate() string {
+	return `Dgraph is a horizontally scalable and distributed graph database,
 providing ACID transactions, consistent replication and linearizable reads.
 It's built from the ground up to perform for a rich set of queries. Being a native
 graph database, it tightly controls how the data is arranged on disk to optimize
 for query performance and throughput, reducing disk seeks and network calls in a
 cluster.` + BuildDetails() +
-	`Usage:{{if .Runnable}}
+		`Usage:{{if .Runnable}}
   {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
   {{.CommandPath}} [command]{{end}} {{if .HasAvailableSubCommands}}
 
@@ -1435,17 +1436,18 @@ Dgraph Debug: {{range .Commands}} {{if (and .IsAvailableCommand (eq .Annotations
 Dgraph Tools: {{range .Commands}} {{if (and .IsAvailableCommand (eq .Annotations.group "tool"))}}
   {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
 ` +
-	// uncomment this part when new availalble commands are added
+		// uncomment this part when new availalble commands are added
 
-	/*Additional Commands:{{range .Commands}}{{if (and .IsAvailableCommand (not .Annotations.group))}}
-	  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}*/
-	`
+		/*Additional Commands:{{range .Commands}}{{if (and .IsAvailableCommand (not .Annotations.group))}}
+		  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}*/
+		`
 Flags:
 {{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}{{if .HasAvailableInheritedFlags}}
 
 
 Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
 `
+}
 
 // NonRootTemplate defines the help template for dgraph sub-command.
 var NonRootTemplate string = `{{if .Long}} {{.Long}} {{else}} {{.Short}} {{end}}

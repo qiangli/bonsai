@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	oc_prom "contrib.go.opencensus.io/exporter/prometheus"
@@ -189,259 +190,268 @@ var (
 
 	allFSKeys = []tag.Key{KeyDirType}
 
-	allViews = []*view.View{
-		{
-			Name:        LatencyMs.Name(),
-			Measure:     LatencyMs,
-			Description: LatencyMs.Description(),
-			Aggregation: defaultLatencyMsDistribution,
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        BadgerReadLatencyMs.Name(),
-			Measure:     BadgerReadLatencyMs,
-			Description: BadgerReadLatencyMs.Description(),
-			Aggregation: defaultLatencyMsDistribution,
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        NumQueries.Name(),
-			Measure:     NumQueries,
-			Description: NumQueries.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        NumPostingListCacheRead.Name(),
-			Measure:     NumPostingListCacheRead,
-			Description: NumPostingListCacheRead.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        NumPostingListCacheReadFail.Name(),
-			Measure:     NumPostingListCacheReadFail,
-			Description: NumPostingListCacheReadFail.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        NumPostingListCacheSave.Name(),
-			Measure:     NumPostingListCacheSave,
-			Description: NumPostingListCacheSave.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        NumEdges.Name(),
-			Measure:     NumEdges,
-			Description: NumEdges.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        NumBackups.Name(),
-			Measure:     NumBackups,
-			Description: NumBackups.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        NumBackupsSuccess.Name(),
-			Measure:     NumBackupsSuccess,
-			Description: NumBackupsSuccess.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        NumBackupsFailed.Name(),
-			Measure:     NumBackupsFailed,
-			Description: NumBackupsFailed.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        TxnCommits.Name(),
-			Measure:     TxnCommits,
-			Description: TxnCommits.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        TxnDiscards.Name(),
-			Measure:     TxnDiscards,
-			Description: TxnDiscards.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        TxnAborts.Name(),
-			Measure:     TxnAborts,
-			Description: TxnAborts.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        ActiveMutations.Name(),
-			Measure:     ActiveMutations,
-			Description: ActiveMutations.Description(),
-			Aggregation: view.Sum(),
-			TagKeys:     nil,
-		},
+	allViews = func() []*view.View {
+		return []*view.View{
+			{
+				Name:        LatencyMs.Name(),
+				Measure:     LatencyMs,
+				Description: LatencyMs.Description(),
+				Aggregation: defaultLatencyMsDistribution,
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        BadgerReadLatencyMs.Name(),
+				Measure:     BadgerReadLatencyMs,
+				Description: BadgerReadLatencyMs.Description(),
+				Aggregation: defaultLatencyMsDistribution,
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        NumQueries.Name(),
+				Measure:     NumQueries,
+				Description: NumQueries.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        NumPostingListCacheRead.Name(),
+				Measure:     NumPostingListCacheRead,
+				Description: NumPostingListCacheRead.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        NumPostingListCacheReadFail.Name(),
+				Measure:     NumPostingListCacheReadFail,
+				Description: NumPostingListCacheReadFail.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        NumPostingListCacheSave.Name(),
+				Measure:     NumPostingListCacheSave,
+				Description: NumPostingListCacheSave.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        NumEdges.Name(),
+				Measure:     NumEdges,
+				Description: NumEdges.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        NumBackups.Name(),
+				Measure:     NumBackups,
+				Description: NumBackups.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        NumBackupsSuccess.Name(),
+				Measure:     NumBackupsSuccess,
+				Description: NumBackupsSuccess.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        NumBackupsFailed.Name(),
+				Measure:     NumBackupsFailed,
+				Description: NumBackupsFailed.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        TxnCommits.Name(),
+				Measure:     TxnCommits,
+				Description: TxnCommits.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        TxnDiscards.Name(),
+				Measure:     TxnDiscards,
+				Description: TxnDiscards.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        TxnAborts.Name(),
+				Measure:     TxnAborts,
+				Description: TxnAborts.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        ActiveMutations.Name(),
+				Measure:     ActiveMutations,
+				Description: ActiveMutations.Description(),
+				Aggregation: view.Sum(),
+				TagKeys:     nil,
+			},
 
-		// Last value aggregations
-		{
-			Name:        PendingQueries.Name(),
-			Measure:     PendingQueries,
-			Description: PendingQueries.Description(),
-			Aggregation: view.Sum(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        PendingProposals.Name(),
-			Measure:     PendingProposals,
-			Description: PendingProposals.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        PendingBackups.Name(),
-			Measure:     PendingBackups,
-			Description: PendingBackups.Description(),
-			Aggregation: view.Sum(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        MemoryAlloc.Name(),
-			Measure:     MemoryAlloc,
-			Description: MemoryAlloc.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        MemoryInUse.Name(),
-			Measure:     MemoryInUse,
-			Description: MemoryInUse.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        MemoryIdle.Name(),
-			Measure:     MemoryIdle,
-			Description: MemoryIdle.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        MemoryProc.Name(),
-			Measure:     MemoryProc,
-			Description: MemoryProc.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        DiskFree.Name(),
-			Measure:     DiskFree,
-			Description: DiskFree.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allFSKeys,
-		},
-		{
-			Name:        DiskUsed.Name(),
-			Measure:     DiskUsed,
-			Description: DiskUsed.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allFSKeys,
-		},
-		{
-			Name:        DiskTotal.Name(),
-			Measure:     DiskTotal,
-			Description: DiskTotal.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allFSKeys,
-		},
-		{
-			Name:        AlphaHealth.Name(),
-			Measure:     AlphaHealth,
-			Description: AlphaHealth.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     nil,
-		},
-		{
-			Name:        PBlockHitRatio.Name(),
-			Measure:     PBlockHitRatio,
-			Description: PBlockHitRatio.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        PIndexHitRatio.Name(),
-			Measure:     PIndexHitRatio,
-			Description: PIndexHitRatio.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        PLCacheHitRatio.Name(),
-			Measure:     PLCacheHitRatio,
-			Description: PLCacheHitRatio.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		{
-			Name:        MaxAssignedTs.Name(),
-			Measure:     MaxAssignedTs,
-			Description: MaxAssignedTs.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allTagKeys,
-		},
-		// Raft metrics
-		{
-			Name:        RaftAppliedIndex.Name(),
-			Measure:     RaftAppliedIndex,
-			Description: RaftAppliedIndex.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allRaftKeys,
-		},
-		{
-			Name:        RaftApplyCh.Name(),
-			Measure:     RaftApplyCh,
-			Description: RaftApplyCh.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allRaftKeys,
-		},
-		{
-			Name:        RaftPendingSize.Name(),
-			Measure:     RaftPendingSize,
-			Description: RaftPendingSize.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allRaftKeys,
-		},
-		{
-			Name:        RaftHasLeader.Name(),
-			Measure:     RaftHasLeader,
-			Description: RaftHasLeader.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allRaftKeys,
-		},
-		{
-			Name:        RaftIsLeader.Name(),
-			Measure:     RaftIsLeader,
-			Description: RaftIsLeader.Description(),
-			Aggregation: view.LastValue(),
-			TagKeys:     allRaftKeys,
-		},
-		{
-			Name:        RaftLeaderChanges.Name(),
-			Measure:     RaftLeaderChanges,
-			Description: RaftLeaderChanges.Description(),
-			Aggregation: view.Count(),
-			TagKeys:     allRaftKeys,
-		},
+			// Last value aggregations
+			{
+				Name:        PendingQueries.Name(),
+				Measure:     PendingQueries,
+				Description: PendingQueries.Description(),
+				Aggregation: view.Sum(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        PendingProposals.Name(),
+				Measure:     PendingProposals,
+				Description: PendingProposals.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        PendingBackups.Name(),
+				Measure:     PendingBackups,
+				Description: PendingBackups.Description(),
+				Aggregation: view.Sum(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        MemoryAlloc.Name(),
+				Measure:     MemoryAlloc,
+				Description: MemoryAlloc.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        MemoryInUse.Name(),
+				Measure:     MemoryInUse,
+				Description: MemoryInUse.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        MemoryIdle.Name(),
+				Measure:     MemoryIdle,
+				Description: MemoryIdle.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        MemoryProc.Name(),
+				Measure:     MemoryProc,
+				Description: MemoryProc.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        DiskFree.Name(),
+				Measure:     DiskFree,
+				Description: DiskFree.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allFSKeys,
+			},
+			{
+				Name:        DiskUsed.Name(),
+				Measure:     DiskUsed,
+				Description: DiskUsed.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allFSKeys,
+			},
+			{
+				Name:        DiskTotal.Name(),
+				Measure:     DiskTotal,
+				Description: DiskTotal.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allFSKeys,
+			},
+			{
+				Name:        AlphaHealth.Name(),
+				Measure:     AlphaHealth,
+				Description: AlphaHealth.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     nil,
+			},
+			{
+				Name:        PBlockHitRatio.Name(),
+				Measure:     PBlockHitRatio,
+				Description: PBlockHitRatio.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        PIndexHitRatio.Name(),
+				Measure:     PIndexHitRatio,
+				Description: PIndexHitRatio.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        PLCacheHitRatio.Name(),
+				Measure:     PLCacheHitRatio,
+				Description: PLCacheHitRatio.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			{
+				Name:        MaxAssignedTs.Name(),
+				Measure:     MaxAssignedTs,
+				Description: MaxAssignedTs.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allTagKeys,
+			},
+			// Raft metrics
+			{
+				Name:        RaftAppliedIndex.Name(),
+				Measure:     RaftAppliedIndex,
+				Description: RaftAppliedIndex.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allRaftKeys,
+			},
+			{
+				Name:        RaftApplyCh.Name(),
+				Measure:     RaftApplyCh,
+				Description: RaftApplyCh.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allRaftKeys,
+			},
+			{
+				Name:        RaftPendingSize.Name(),
+				Measure:     RaftPendingSize,
+				Description: RaftPendingSize.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allRaftKeys,
+			},
+			{
+				Name:        RaftHasLeader.Name(),
+				Measure:     RaftHasLeader,
+				Description: RaftHasLeader.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allRaftKeys,
+			},
+			{
+				Name:        RaftIsLeader.Name(),
+				Measure:     RaftIsLeader,
+				Description: RaftIsLeader.Description(),
+				Aggregation: view.LastValue(),
+				TagKeys:     allRaftKeys,
+			},
+			{
+				Name:        RaftLeaderChanges.Name(),
+				Measure:     RaftLeaderChanges,
+				Description: RaftLeaderChanges.Description(),
+				Aggregation: view.Count(),
+				TagKeys:     allRaftKeys,
+			},
+		}
 	}
 )
 
-func init() {
+var metricsOnce sync.Once
+
+// EnsureMetrics registers the OpenCensus views, the Prometheus exporter and
+// the health ticker. It is idempotent and deliberately not run from init so
+// that merely importing this package costs nothing.
+func EnsureMetrics() { metricsOnce.Do(initMetrics) }
+
+func initMetrics() {
 	Conf = expvar.NewMap("dgraph_config")
 
 	ctx := MetricsContext()
@@ -461,7 +471,7 @@ func init() {
 		}
 	}()
 
-	CheckfNoTrace(view.Register(allViews...))
+	CheckfNoTrace(view.Register(allViews()...))
 
 	promRegistry := prometheus.NewRegistry()
 	promRegistry.MustRegister(NewBadgerCollector())

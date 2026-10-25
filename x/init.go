@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"runtime"
+	"sync"
 
 	"github.com/golang/glog"
 
@@ -80,14 +81,14 @@ func Codename() string {
 }
 
 // pattern for  dev version = min. 7 hex digits of commit-hash.
-var versionRe *regexp.Regexp = regexp.MustCompile(`-g[[:xdigit:]]{7,}`)
+var versionRe = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`-g[[:xdigit:]]{7,}`) })
 
 // DevVersion returns true if the version string contains the above pattern
 // e.g.
 //  1. v2.0.0-rc1-127-gd20a768b3 => dev version
 //  2. v2.0.0 => prod version
 func DevVersion() (matched bool) {
-	return versionRe.MatchString(dgraphVersion)
+	return versionRe().MatchString(dgraphVersion)
 }
 
 // ExecutableChecksum returns a byte slice containing the SHA256 checksum of the executable.

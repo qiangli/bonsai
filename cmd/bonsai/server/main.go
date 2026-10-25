@@ -40,6 +40,7 @@ import (
 	"github.com/qiangli/bonsai/pkg/bonsai"
 	"github.com/qiangli/bonsai/pkg/graphql"
 	"github.com/qiangli/bonsai/pkg/ui"
+	"github.com/qiangli/bonsai/x"
 )
 
 // Version is set by the top-level dispatcher (cmd/bonsai/main.go) before
@@ -65,6 +66,7 @@ type serverConfig struct {
 }
 
 func Main() {
+	x.EnsureMetrics()
 	configFile := flag.String("config", "", "YAML config file (overridden by env BONSAI_* and CLI flags)")
 	dir := flag.String("dir", "./bonsai-data", "data directory (Badger lives at <dir>/p)")
 	addr := flag.String("http", ":8080", "HTTP listen address")
