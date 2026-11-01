@@ -105,8 +105,10 @@ type DB struct {
 	mutationTick atomic.Uint64
 
 	// gcStop signals the background value-log GC ticker to exit at Close.
-	// nil if Options.ValueLogGCInterval was negative or ReadOnly is set.
+	// Both channels are immutable after Open. Close waits for gcDone before
+	// shutting down the posting/Badger stores. Both are nil when GC is disabled.
 	gcStop chan struct{}
+	gcDone chan struct{}
 
 	// frozenTemp is set by OpenFrozen to the temp directory the artifact
 	// was extracted into; removed during Close. Empty for ordinary opens.
@@ -250,6 +252,7 @@ func Open(opts Options) (*DB, error) {
 	}
 	if gcInterval > 0 && !opts.ReadOnly {
 		db.gcStop = make(chan struct{})
+		db.gcDone = make(chan struct{})
 		go db.valueLogGCLoop(gcInterval)
 	}
 	return db, nil
@@ -259,6 +262,7 @@ func Open(opts Options) (*DB, error) {
 // value log. RunValueLogGC returns badger.ErrNoRewrite when nothing to
 // reclaim — that's the steady state, not an error.
 func (d *DB) valueLogGCLoop(interval time.Duration) {
+	defer close(d.gcDone)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -269,6 +273,11 @@ func (d *DB) valueLogGCLoop(interval time.Duration) {
 			// Ratio 0.5: rewrite a vlog file when 50% of its data is
 			// stale. Loop until we hit ErrNoRewrite or anything else.
 			for {
+				select {
+				case <-d.gcStop:
+					return
+				default:
+				}
 				if err := d.pstore.RunValueLogGC(0.5); err != nil {
 					break
 				}
@@ -359,7 +368,7 @@ func (d *DB) Close() error {
 	}
 	if d.gcStop != nil {
 		close(d.gcStop)
-		d.gcStop = nil
+		<-d.gcDone
 	}
 	posting.Cleanup()
 	worker.BlockingStop()
