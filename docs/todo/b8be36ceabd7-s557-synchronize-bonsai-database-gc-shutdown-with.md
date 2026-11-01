@@ -12,7 +12,7 @@ sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
 ---
 
-Root independent race gate for bf567b2 detects DB.Close db.go:362 write versus valueLogGCLoop db.go:266 read in GraphQL subscription tests. Diagnose and fix lifecycle safely; do not disable race or suppress GC. Repro GOWORK=off GOMAXPROCS=2 GOFLAGS=-p=2 go test -race -count=3 -timeout=3m -run '^TestSubscription(MutationDuringInitialSend|Lifecycle|ConnectionAck)$' ./pkg/graphql in /Users/qiangli/.bashy/weave/bonsai-19397c96/workspaces/issue-1. Worker submitted, noactivewrites. Workisolatedclone/worktreefrombf567b2 preservingexternalpatch. AddmeaningfuldeterministicClose/GCtest ifneeded, nofullsuiteslocal. CommitnamedfileswithSprint557trailers, nopush.
+Root independent race gate for bf567b2 detects DB.Close db.go:362 write versus valueLogGCLoop db.go:266 read in GraphQL subscription tests. Diagnose and fix lifecycle safely; do not disable race or suppress GC. Repro GOWORK=off GOMAXPROCS=2 GOFLAGS=-p=2 go test -race -count=3 -timeout=3m -run '^TestSubscription(MutationDuringInitialSend|Lifecycle|ConnectionAck)$' ./pkg/graphql in the isolated subscription-repair workspace. Worker submitted, noactivewrites. Workisolatedclone/worktreefrombf567b2 preservingexternalpatch. AddmeaningfuldeterministicClose/GCtest ifneeded, nofullsuiteslocal. CommitnamedfileswithSprint557trailers, nopush.
 
 ## Implementation
 
