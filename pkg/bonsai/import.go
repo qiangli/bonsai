@@ -111,6 +111,8 @@ func ImportStream(ctx context.Context, db *DB, format string, r io.Reader, batch
 	prodErr := make(chan error, 1)
 	go func() {
 		defer close(prodErr)
+		// End the consumer on parsing and reading failures as well as EOF.
+		defer ch.NQuads().Flush()
 		br := bufio.NewReaderSize(r, 1<<20)
 		for {
 			cb, err := ch.Chunk(br)
@@ -128,7 +130,6 @@ func ImportStream(ctx context.Context, db *DB, format string, r io.Reader, batch
 				return
 			}
 		}
-		ch.NQuads().Flush()
 	}()
 
 	// Consumer applies batches. We use one consumer because db.Mutate

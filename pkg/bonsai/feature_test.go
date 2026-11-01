@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	apiproto "github.com/dgraph-io/dgo/v250/protos/api"
 
@@ -1143,5 +1145,28 @@ func TestFeatureVectorSimilarTo(t *testing.T) {
 	}
 	if strings.Contains(got, "Far") {
 		t.Errorf("similar_to returned far point: %s", got)
+	}
+}
+
+// Producer failures must close the batch stream so ImportStream returns the
+// original error instead of waiting forever for its consumer.
+func TestFeatureImportStreamProducerErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader io.Reader
+		want   string
+	}{
+		{"parse", strings.NewReader("not valid RDF\n"), "parse:"},
+		{"read", iotest.ErrReader(errors.New("fixture read failure")), "fixture read failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary, err := bonsai.ImportStream(context.Background(), newDB(t), "rdf", tc.reader, 100)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ImportStream error = %v, want %q", err, tc.want)
+			}
+			if summary == nil || summary.Nquads != 0 || summary.Batches != 0 {
+				t.Fatalf("unexpected partial import: %+v", summary)
+			}
+		})
 	}
 }

@@ -198,7 +198,7 @@ func (s *state) Set(pred string, schema *pb.SchemaUpdate) {
 	s.Lock()
 	defer s.Unlock()
 	s.predicate[pred] = schema
-	s.elog.Printf(logUpdate(schema, pred))
+	s.elog.Printf("%s", logUpdate(schema, pred))
 }
 
 // SetMutSchema sets the mutation schema for the given predicate.
@@ -237,7 +237,7 @@ func (s *state) SetType(typeName string, typ *pb.TypeUpdate) {
 	s.Lock()
 	defer s.Unlock()
 	s.types[typeName] = typ
-	s.elog.Printf(logTypeUpdate(typ, typeName))
+	s.elog.Printf("%s", logTypeUpdate(typ, typeName))
 }
 
 // Get returns an owned copy of the schema for the given predicate. Callers may
@@ -553,7 +553,7 @@ func Load(predicate string) error {
 		return err
 	}
 	State().Set(predicate, &s)
-	State().elog.Printf(logUpdate(&s, predicate))
+	State().elog.Printf("%s", logUpdate(&s, predicate))
 	glog.Infoln(logUpdate(&s, predicate))
 	return nil
 }
