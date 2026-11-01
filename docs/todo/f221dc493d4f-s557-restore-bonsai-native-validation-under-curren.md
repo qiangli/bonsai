@@ -19,3 +19,11 @@ always flushes/closes its NQuad stream, including parse/read failures, so the
 consumer exits and the original error returns. Targeted export/import and both
 producer error regressions pass; schema compilation/vet passes. Hosted complete
 native suite remains the acceptance gate.
+
+Windows fixture follow-up: initialization probes use the .exe suffix on Windows;
+file discovery expectations use filepath.Join. Log-writer tests use separate
+TempDir roots, check initialization/reader/scanner errors, close all readers,
+and wait for concurrent writers with a WaitGroup instead of sleeping. The
+10000-line assertion and initialization budget are unchanged.
+Validation: targeted four log/file tests pass (0.548s); x tests compile for
+Windows/amd64. Full native suites remain the manager's hosted acceptance gate.

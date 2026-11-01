@@ -12,19 +12,19 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestLogWriter(t *testing.T) {
-	path, _ := filepath.Abs("./log_test/audit.log")
-	defer os.RemoveAll(filepath.Dir(path))
+	path := filepath.Join(t.TempDir(), "audit.log")
 	lw := &LogWriter{
 		FilePath: path,
 		MaxSize:  1,
@@ -32,13 +32,15 @@ func TestLogWriter(t *testing.T) {
 		Compress: false,
 	}
 
-	lw, _ = lw.Init()
+	var err error
+	lw, err = lw.Init()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lw.Close()) })
 	writeToLogWriterAndVerify(t, lw, path)
 }
 
 func TestLogWriterWithCompression(t *testing.T) {
-	path, _ := filepath.Abs("./log_test/audit.log")
-	defer os.RemoveAll(filepath.Dir(path))
+	path := filepath.Join(t.TempDir(), "audit.log")
 	lw := &LogWriter{
 		FilePath: path,
 		MaxSize:  1,
@@ -46,15 +48,17 @@ func TestLogWriterWithCompression(t *testing.T) {
 		Compress: true,
 	}
 
-	lw, _ = lw.Init()
+	var err error
+	lw, err = lw.Init()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lw.Close()) })
 	writeToLogWriterAndVerify(t, lw, path)
 }
 
 // if this test failed and you changed anything, please check the dgraph audit decrypt command.
 // The dgraph audit decrypt command uses the same decryption method
 func TestLogWriterWithEncryption(t *testing.T) {
-	path, _ := filepath.Abs("./log_test/audit.log.enc")
-	defer os.RemoveAll(filepath.Dir(path))
+	path := filepath.Join(t.TempDir(), "audit.log.enc")
 	lw := &LogWriter{
 		FilePath:      path,
 		MaxSize:       1,
@@ -63,7 +67,10 @@ func TestLogWriterWithEncryption(t *testing.T) {
 		EncryptionKey: []byte("1234567890123456"), // 16 bytes
 	}
 
-	lw, _ = lw.Init()
+	var err error
+	lw, err = lw.Init()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lw.Close()) })
 	msg := []byte("abcd")
 	msg = bytes.Repeat(msg, 256)
 	msg[1023] = '\n'
@@ -73,15 +80,14 @@ func TestLogWriterWithEncryption(t *testing.T) {
 		require.Equal(t, n, len(msg)+20, "write length is not equal")
 	}
 
-	time.Sleep(time.Second * 10)
 	require.NoError(t, lw.Close())
 	file, err := os.Open(path)
 	require.NoError(t, err)
-	defer file.Close()
-	outPath, _ := filepath.Abs("./log_test/audit_out.log")
+	defer func() { require.NoError(t, file.Close()) }()
+	outPath := filepath.Join(filepath.Dir(path), "audit_out.log")
 	outfile, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	require.NoError(t, err)
-	defer outfile.Close()
+	defer func() { require.NoError(t, outfile.Close()) }()
 
 	block, err := aes.NewCipher(lw.EncryptionKey)
 	require.NoError(t, err)
@@ -120,39 +126,53 @@ func writeToLogWriterAndVerify(t *testing.T, lw *LogWriter, path string) {
 	msg := []byte("abcd")
 	msg = bytes.Repeat(msg, 256)
 	msg[1023] = '\n'
+	var writers sync.WaitGroup
+	errors := make(chan error, 10)
 	for range 10 {
+		writers.Add(1)
 		go func() {
+			defer writers.Done()
 			for range 1000 {
 				n, err := lw.Write(msg)
-				require.NoError(t, err)
-				require.Equal(t, n, len(msg), "write length is not equal")
+				if err != nil {
+					errors <- err
+					return
+				}
+				if n != len(msg) {
+					errors <- fmt.Errorf("write length %d, want %d", n, len(msg))
+					return
+				}
 			}
 		}()
 	}
-	time.Sleep(time.Second * 10)
+	writers.Wait()
+	close(errors)
 	require.NoError(t, lw.Close())
-	files, err := os.ReadDir("./log_test")
+	for err := range errors {
+		require.NoError(t, err)
+	}
+	files, err := os.ReadDir(filepath.Dir(path))
 	require.NoError(t, err)
 
 	lineCount := 0
 	for _, f := range files {
-		file, _ := os.Open(filepath.Join(filepath.Dir(path), f.Name()))
-
-		var fileScanner *bufio.Scanner
-		if strings.HasSuffix(file.Name(), ".gz") {
-			gz, err := gzip.NewReader(file)
+		func() {
+			file, err := os.Open(filepath.Join(filepath.Dir(path), f.Name()))
 			require.NoError(t, err)
-			all, err := io.ReadAll(gz)
-			require.NoError(t, err)
-			fileScanner = bufio.NewScanner(bytes.NewReader(all))
-			gz.Close()
-		} else {
-			fileScanner = bufio.NewScanner(file)
-		}
-		for fileScanner.Scan() {
-			lineCount = lineCount + 1
-		}
+			defer func() { require.NoError(t, file.Close()) }()
+			var reader io.Reader = file
+			if strings.HasSuffix(file.Name(), ".gz") {
+				gz, err := gzip.NewReader(file)
+				require.NoError(t, err)
+				defer func() { require.NoError(t, gz.Close()) }()
+				reader = gz
+			}
+			scanner := bufio.NewScanner(reader)
+			for scanner.Scan() {
+				lineCount++
+			}
+			require.NoError(t, scanner.Err())
+		}()
 	}
-
-	require.Equal(t, lineCount, 10000)
+	require.Equal(t, 10000, lineCount)
 }

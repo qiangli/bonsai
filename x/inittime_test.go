@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -38,7 +39,11 @@ func buildProbe(t *testing.T, imports ...string) string {
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(dir, "probe")
+	name := "probe"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin := filepath.Join(dir, name)
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
