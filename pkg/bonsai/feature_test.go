@@ -568,9 +568,15 @@ func TestFeatureExportImportRoundtrip(t *testing.T) {
 		name:   string @index(exact) .
 		friend: [uid]                 .
 	`)
-	if _, err := bonsai.ImportStream(context.Background(), dst, "rdf",
-		strings.NewReader(dump), 100); err != nil {
-		t.Fatalf("ImportStream: %v", err)
+	summary, err := bonsai.ImportStream(context.Background(), dst, "rdf",
+		strings.NewReader(dump), 100)
+	if err != nil {
+		t.Fatalf("ImportStream: %v; dump:\n%s", err, dump)
+	}
+	// All three scalar records and three edges must survive the parallel
+	// export callbacks before we verify their queryable relationships.
+	if summary.Nquads != 6 || summary.Batches != 1 || summary.Errors != 0 {
+		t.Errorf("incomplete roundtrip import: %+v; dump:\n%s", summary, dump)
 	}
 
 	got := mustQuery(t, dst, `{

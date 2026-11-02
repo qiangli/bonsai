@@ -1011,6 +1011,10 @@ func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 	// Walk all data keys via Badger stream. For each posting list we
 	// iterate every posting (not just the single-value head) so uid-list
 	// predicates emit one edge per neighbour rather than getting skipped.
+	// KeyToList runs concurrently. The caller's writer need not be safe for
+	// concurrent use, and a scalar posting takes several writes: serialize
+	// the entire record so that triples cannot interleave or lose bytes.
+	var writeMu sync.Mutex
 	stream := d.pstore.NewStreamAt(readTs)
 	stream.Prefix = []byte{x.ByteData}
 	stream.KeyToList = func(key []byte, _ *badger.Iterator) (*badgerpb.KVList, error) {
@@ -1027,7 +1031,9 @@ func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 		}
 		_, attr := x.ParseNamespaceAttr(pk.Attr)
 		_ = pl.Iterate(readTs, 0, func(p *pb.Posting) error {
+			writeMu.Lock()
 			emitRDFPosting(w, pk.Uid, attr, p)
+			writeMu.Unlock()
 			return nil
 		})
 		return nil, nil
