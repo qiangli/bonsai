@@ -3,13 +3,16 @@ id: b8be36ceabd7
 kind: bug
 title: S557 synchronize Bonsai database GC shutdown with Close
 seq: 4
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T22:02:22.710915Z
 assignee: s557-test-readiness
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:10.697001Z
 ---
 
 Root independent race gate for bf567b2 detects DB.Close db.go:362 write versus valueLogGCLoop db.go:266 read in GraphQL subscription tests. Diagnose and fix lifecycle safely; do not disable race or suppress GC. Repro GOWORK=off GOMAXPROCS=2 GOFLAGS=-p=2 go test -race -count=3 -timeout=3m -run '^TestSubscription(MutationDuringInitialSend|Lifecycle|ConnectionAck)$' ./pkg/graphql in the isolated subscription-repair workspace. Worker submitted, noactivewrites. Workisolatedclone/worktreefrombf567b2 preservingexternalpatch. AddmeaningfuldeterministicClose/GCtest ifneeded, nofullsuiteslocal. CommitnamedfileswithSprint557trailers, nopush.
@@ -39,3 +42,7 @@ go test -race -count=3 -timeout=3m \
 
 GraphQL passed in 5.013s and Bonsai lifecycle checks passed in 2.873s.
 Full suites and canonical integration remain the manager's responsibility.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.
