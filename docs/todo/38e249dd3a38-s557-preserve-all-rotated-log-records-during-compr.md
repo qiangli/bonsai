@@ -3,12 +3,14 @@ id: 38e249dd3a38
 kind: task
 title: S557 preserve all rotated log records during compression shutdown
 seq: 7
-status: assigned
+status: done
 created: 2026-11-02T03:26:49.850274Z
 assignee: s557-public-tooling
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T04:03:13.648221Z
+closed_by: s557-manager
 ---
 
 Hosted native-repairs41381899440 exact umbrella8325b1b Linux TestLogWriterWithCompression reports8977 lines versus10000 after Close; macOS/Windows pass. Diagnose bounded reproduction and writer Close/flush/compression lifecycle, preserve count/assertions, no sleeps. Repair only with source or reproduction evidence; isolated worktree, focused race tests, root reviews and publishes.
@@ -31,3 +33,9 @@ Implementation checkpoint:
   actual rotation preservation), ten repetitions each, passed in 7.433s.
   The existing 10000-record assertions and worker joins are unchanged.
 - Full hosted verification and manager acceptance remain pending.
+
+## Scoped acceptance
+
+Hosted native run41384053290 at umbrella64995c0 and Bonsaicc5b3dc passed original writer/compression/encryption assertions on Linux, Windows and macOS. The 10000-record checks remain unchanged. Root source review and focused race gate passed; this is scoped repair acceptance, not full native validation.
+
+Evidence: https://github.com/dhnt/umbrella/actions/runs/41384053290
