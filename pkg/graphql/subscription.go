@@ -178,11 +178,6 @@ func runSubscription(
 		return send(wsMessage{ID: id, Type: "next", Payload: body})
 	}
 
-	// Capture the tick before evaluating and sending the initial frame. A
-	// mutation during either step must still trigger a poll; sampling after
-	// the send would make that mutation the baseline and hide it until maxIdle.
-	lastTick := db.MutationTick()
-
 	// Initial evaluation: every subscription should fire once with the
 	// current state so clients see existing data immediately.
 	prev, prevHash := evalAndHash(ctx, db, &p)
@@ -190,6 +185,7 @@ func runSubscription(
 		return
 	}
 
+	lastTick := db.MutationTick()
 	lastEval := time.Now()
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()

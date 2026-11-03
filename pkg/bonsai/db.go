@@ -105,10 +105,8 @@ type DB struct {
 	mutationTick atomic.Uint64
 
 	// gcStop signals the background value-log GC ticker to exit at Close.
-	// Both channels are immutable after Open. Close waits for gcDone before
-	// shutting down the posting/Badger stores. Both are nil when GC is disabled.
+	// nil if Options.ValueLogGCInterval was negative or ReadOnly is set.
 	gcStop chan struct{}
-	gcDone chan struct{}
 
 	// frozenTemp is set by OpenFrozen to the temp directory the artifact
 	// was extracted into; removed during Close. Empty for ordinary opens.
@@ -252,7 +250,6 @@ func Open(opts Options) (*DB, error) {
 	}
 	if gcInterval > 0 && !opts.ReadOnly {
 		db.gcStop = make(chan struct{})
-		db.gcDone = make(chan struct{})
 		go db.valueLogGCLoop(gcInterval)
 	}
 	return db, nil
@@ -262,7 +259,6 @@ func Open(opts Options) (*DB, error) {
 // value log. RunValueLogGC returns badger.ErrNoRewrite when nothing to
 // reclaim — that's the steady state, not an error.
 func (d *DB) valueLogGCLoop(interval time.Duration) {
-	defer close(d.gcDone)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -273,11 +269,6 @@ func (d *DB) valueLogGCLoop(interval time.Duration) {
 			// Ratio 0.5: rewrite a vlog file when 50% of its data is
 			// stale. Loop until we hit ErrNoRewrite or anything else.
 			for {
-				select {
-				case <-d.gcStop:
-					return
-				default:
-				}
 				if err := d.pstore.RunValueLogGC(0.5); err != nil {
 					break
 				}
@@ -368,7 +359,7 @@ func (d *DB) Close() error {
 	}
 	if d.gcStop != nil {
 		close(d.gcStop)
-		<-d.gcDone
+		d.gcStop = nil
 	}
 	posting.Cleanup()
 	worker.BlockingStop()
@@ -1011,10 +1002,6 @@ func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 	// Walk all data keys via Badger stream. For each posting list we
 	// iterate every posting (not just the single-value head) so uid-list
 	// predicates emit one edge per neighbour rather than getting skipped.
-	// KeyToList runs concurrently. The caller's writer need not be safe for
-	// concurrent use, and a scalar posting takes several writes: serialize
-	// the entire record so that triples cannot interleave or lose bytes.
-	var writeMu sync.Mutex
 	stream := d.pstore.NewStreamAt(readTs)
 	stream.Prefix = []byte{x.ByteData}
 	stream.KeyToList = func(key []byte, _ *badger.Iterator) (*badgerpb.KVList, error) {
@@ -1031,9 +1018,7 @@ func (d *DB) exportRDF(ctx context.Context, w io.Writer) error {
 		}
 		_, attr := x.ParseNamespaceAttr(pk.Attr)
 		_ = pl.Iterate(readTs, 0, func(p *pb.Posting) error {
-			writeMu.Lock()
 			emitRDFPosting(w, pk.Uid, attr, p)
-			writeMu.Unlock()
 			return nil
 		})
 		return nil, nil

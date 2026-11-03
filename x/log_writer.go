@@ -43,12 +43,11 @@ type LogWriter struct {
 	Compress      bool
 	EncryptionKey []byte
 
-	mu             sync.Mutex
-	size           int64
-	file           *os.File
-	writer         *bufio.Writer
-	closer         *z.Closer
-	lastBackupTime time.Time
+	mu     sync.Mutex
+	size   int64
+	file   *os.File
+	writer *bufio.Writer
+	closer *z.Closer
 	// To manage order of cleaning old logs files
 	manageChannel chan bool
 }
@@ -207,10 +206,7 @@ func (l *LogWriter) rotate() error {
 
 	if _, err := os.Stat(l.FilePath); err == nil {
 		// move the existing file
-		newname, err := l.nextBackupName(time.Now())
-		if err != nil {
-			return err
-		}
+		newname := backupName(l.FilePath)
 		if err := os.Rename(l.FilePath, newname); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
@@ -310,37 +306,11 @@ func (l *LogWriter) open() error {
 	return nil
 }
 
-// nextBackupName runs under mu. A logical millisecond clock prevents reuse even
-// when compression removes the original pathname before the next rotation.
-// Check both forms on disk as well, so reopening a writer cannot overwrite a
-// backup left by an earlier writer. The timestamp format stays compatible with
-// existing retention parsing.
-func (l *LogWriter) nextBackupName(now time.Time) (string, error) {
-	timestamp := now.UTC().Truncate(time.Millisecond)
-	if !timestamp.After(l.lastBackupTime) {
-		timestamp = l.lastBackupTime.Add(time.Millisecond)
-	}
-	dir := filepath.Dir(l.FilePath)
-	prefix, ext := prefixAndExt(l.FilePath)
-	for {
-		name := filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp.Format(backupTimeFormat), ext))
-		occupied := false
-		for _, path := range []string{name, name + ".gz"} {
-			_, err := os.Lstat(path)
-			if err == nil {
-				occupied = true
-				break
-			}
-			if !os.IsNotExist(err) {
-				return "", err
-			}
-		}
-		if !occupied {
-			l.lastBackupTime = timestamp
-			return name, nil
-		}
-		timestamp = timestamp.Add(time.Millisecond)
-	}
+func backupName(name string) string {
+	dir := filepath.Dir(name)
+	prefix, ext := prefixAndExt(name)
+	timestamp := time.Now().UTC().Format(backupTimeFormat)
+	return filepath.Join(dir, fmt.Sprintf("%s-%s%s", prefix, timestamp, ext))
 }
 
 func compress(src string) error {
@@ -423,7 +393,7 @@ func (l *LogWriter) manageOldLogs() {
 }
 
 // prefixAndExt extracts the filename and extension from a filepath.
-// eg. prefixAndExt("/logs/file.ext") would return ("file", ".ext").
+// eg. prefixAndExt("/home/foo/file.ext") would return ("file", ".ext").
 func prefixAndExt(file string) (prefix, ext string) {
 	filename := filepath.Base(file)
 	ext = filepath.Ext(filename)

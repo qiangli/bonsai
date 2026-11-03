@@ -25,9 +25,9 @@ func TestFindDataFiles(t *testing.T) {
 	validTestFiles := filepath.Join(filepath.Dir(thisFile), "test-files-valid")
 	invalidTestFiles := filepath.Join(filepath.Dir(thisFile), "test-files-invalid")
 	expectedFilesArray := []string{
-		filepath.Join("test-files-valid", "test-2.rdf.gz"),
-		filepath.Join("test-files-valid", "test-3.json"),
-		filepath.Join("test-files-valid", "test-4.json.gz"),
+		"test-files-valid/test-2.rdf.gz",
+		"test-files-valid/test-3.json",
+		"test-files-valid/test-4.json.gz",
 	}
 	file_data := [7]string{
 		"test-1.txt",
