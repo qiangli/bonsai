@@ -1,71 +1,58 @@
-# Bonsai — lightweight, local-only fork of upstream Dgraph.
-#
-# Targets:
-#   make build    — compile the single `bonsai` binary (subcommands inside)
-#   make install  — `go install` into $GOBIN (or $GOPATH/bin) with the same ldflags
-#   make test     — run unit + e2e tests
-#   make all      — build + test + vet
-#   make clean    — remove the built binary
+###########################################################################
+##  GENERATED FILE — DO NOT EDIT.                                        ##
+##  Produced from dag.md by `bashy dag --makefile`. Edit dag.md instead, ##
+##  then regenerate; manual changes are overwritten and fail --check.    ##
+###########################################################################
+# Tasks live in dag.md (a bashy dag file); this Makefile only forwards.
+#   bashy dag <target>           run a target (its dependencies first)
+#   bashy dag --list             list targets
+#   bashy dag --dry-run <target> print the plan, run nothing
+#   bashy dag --skill DIR        export these tasks as an Agent Skill
+# Regenerate with: bashy dag --makefile  (verify: bashy dag --makefile --check)
 
-GOFLAGS  ?=
-# Version baked into the binary via -ldflags. Override with `make build VERSION=v1.2.3`
-# or via the VERSION env var. Falls back to `git describe` if available, else "dev".
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS  := -s -w -X main.version=$(VERSION)
+# List the dag targets, then how to run them natively.
+help: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag --list; echo "Run: bashy dag <target> | skill: bashy dag --skill DIR | more: bashy help"
 
-# INSTALL_DIR resolves to where `go install` will deposit the binary, so the
-# `install` target can print a helpful "added to <path>" line on success.
-INSTALL_DIR := $(shell go env GOBIN)
-ifeq ($(INSTALL_DIR),)
-INSTALL_DIR := $(shell go env GOPATH)/bin
-endif
+# Compile the single `bonsai` binary (subcommands inside) into ./bonsai, with the version ldflags.
+build: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag build
 
-.PHONY: build install test all clean vet fmtcheck hooks
+# `go install` into $GOBIN (or $GOPATH/bin) with the same ldflags as build.
+install: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag install
 
-build:
-	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bonsai ./cmd/bonsai
+# Run unit + e2e tests (the bonsai-authored package set the old Makefile ran).
+test: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag test
 
-install:
-	@echo "→ installing bonsai $(VERSION) into $(INSTALL_DIR)"
-	@go install $(GOFLAGS) -ldflags="$(LDFLAGS)" ./cmd/bonsai
-	@echo "  done — run \`bonsai help\` to verify ($(INSTALL_DIR) must be on \$$PATH)"
+# go vet over the packages bonsai wrote or substantially rewrote.
+vet: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag vet
 
-test:
-	go test $(GOFLAGS) -count=1 ./pkg/bonsai/... ./pkg/bonsai/graphalgo/... ./pkg/graphql/... ./pkg/audit/... ./pkg/ui/... ./cmd/bonsai/server/... ./cmd/bonsai/tools/...
+# Build + test + vet, as one gate.
+all: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag all
 
-# go vet on the whole tree flags many pre-existing `copylocks` warnings in
-# upstream code (the proto-generated types embed sync.Mutex via MessageState
-# in google.golang.org/protobuf/runtime). Those are inherited from priorart
-# and unrelated to the bonsai rewrite. The vet target below only checks
-# packages bonsai wrote or substantially rewrote.
-vet:
-	go vet ./pkg/bonsai/... ./cmd/bonsai/... ./worker/...
+# Simulate an external Go program importing pkg/bonsai.
+smoke-as-third-party: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag smoke-as-third-party
 
-all: vet build test
+# Remove the built binary.
+clean: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag clean
 
-# smoke-as-third-party simulates an external Go program importing
-# pkg/bonsai. If this stops compiling we've broken our v1 API contract
-# (see pkg/bonsai/doc.go). Run from a clean state, expects the example
-# to print exactly the line `{"q":[{"name":"Alice"}]}`.
-.PHONY: smoke-as-third-party
-smoke-as-third-party:
-	@echo "→ third-party smoke: build + run testdata/third-party-example"
-	@go build -o /tmp/bonsai-smoke ./testdata/third-party-example
-	@got=$$(/tmp/bonsai-smoke); \
-	  want='{"q":[{"name":"Alice"}]}'; \
-	  if [ "$$got" = "$$want" ]; then \
-	    echo "  OK: $$got"; \
-	  else \
-	    echo "  FAIL: got $$got, want $$want"; exit 1; \
-	  fi
-	@rm -f /tmp/bonsai-smoke
+# The gofmt gate (reports unformatted files, never rewrites them), plus a check that the generated Makefile still matches this file — regenerate with `bashy dag…
+fmtcheck: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag fmtcheck
 
-clean:
-	rm -f bonsai
+# Install the pre-push formatting gate.
+hooks: FORCE
+	@command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag hooks
 
-fmtcheck:  ## gofmt gate — reports unformatted files, never rewrites them
-	@./scripts/fmtcheck.sh
+.DEFAULT: ; @command -v bashy >/dev/null || { echo "requires bashy: https://github.com/qiangli/bashy"; exit 127; }; bashy dag $@
 
-hooks:  ## install the pre-push formatting gate
-	@git config core.hooksPath scripts/hooks
-	@echo "hooks installed: core.hooksPath=scripts/hooks"
+# FORCE names no file and has no recipe: as the one prerequisite it
+# keeps every forward running even when a file or directory on disk
+# shares a target's name. Dependency order stays in dag, not here.
+FORCE:
